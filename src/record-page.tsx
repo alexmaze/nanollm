@@ -780,17 +780,30 @@ const SCRIPT = String.raw`
           summary.textContent = "Array(" + value.length + ")";
           details.appendChild(summary);
           const body = document.createElement("div");
-          value.forEach((item, index) => {
-            const entry = document.createElement("div");
-            entry.className = "entry";
-            const key = document.createElement("span");
-            key.className = "key";
-            key.textContent = index + ": ";
-            entry.appendChild(key);
-            entry.appendChild(createValueNode(item, options));
-            body.appendChild(entry);
-          });
           details.appendChild(body);
+          function renderArrayChildren() {
+            value.forEach((item, index) => {
+              const entry = document.createElement("div");
+              entry.className = "entry";
+              const key = document.createElement("span");
+              key.className = "key";
+              key.textContent = index + ": ";
+              entry.appendChild(key);
+              entry.appendChild(createValueNode(item, options));
+              body.appendChild(entry);
+            });
+          }
+          if (expanded) {
+            renderArrayChildren();
+          } else {
+            let rendered = false;
+            details.addEventListener("toggle", function onToggle() {
+              if (rendered || !details.open) return;
+              rendered = true;
+              details.removeEventListener("toggle", onToggle);
+              renderArrayChildren();
+            });
+          }
           return details;
         }
 
@@ -802,17 +815,30 @@ const SCRIPT = String.raw`
           summary.textContent = "Object{" + entries.length + "}";
           details.appendChild(summary);
           const body = document.createElement("div");
-          for (const [keyName, childValue] of entries) {
-            const entry = document.createElement("div");
-            entry.className = "entry";
-            const key = document.createElement("span");
-            key.className = "key";
-            key.textContent = keyName + ": ";
-            entry.appendChild(key);
-            entry.appendChild(createValueNode(childValue, options));
-            body.appendChild(entry);
-          }
           details.appendChild(body);
+          function renderObjectChildren() {
+            for (const [keyName, childValue] of entries) {
+              const entry = document.createElement("div");
+              entry.className = "entry";
+              const key = document.createElement("span");
+              key.className = "key";
+              key.textContent = keyName + ": ";
+              entry.appendChild(key);
+              entry.appendChild(createValueNode(childValue, options));
+              body.appendChild(entry);
+            }
+          }
+          if (expanded) {
+            renderObjectChildren();
+          } else {
+            let rendered = false;
+            details.addEventListener("toggle", function onToggle() {
+              if (rendered || !details.open) return;
+              rendered = true;
+              details.removeEventListener("toggle", onToggle);
+              renderObjectChildren();
+            });
+          }
           return details;
         }
 
@@ -1373,17 +1399,41 @@ const SCRIPT = String.raw`
             const listFold = createFold("流事件");
             const list = document.createElement("div");
             list.className = "stream-list";
-            streamState.events.forEach((item, index) => {
+            function renderEventItem(item, index) {
               const fold = createFold(getStreamEventLabel(item, index + 1));
-              if (item.event) {
-                const meta = document.createElement("div");
-                meta.className = "stream-meta";
-                meta.textContent = "event: " + item.event;
-                fold.body.appendChild(meta);
-              }
-              fold.body.appendChild(renderStreamValue(item.parsed ?? item.data));
-              list.appendChild(fold.fold);
-            });
+              let rendered = false;
+              fold.fold.addEventListener("toggle", function onToggle() {
+                if (rendered || !fold.fold.open) return;
+                rendered = true;
+                fold.fold.removeEventListener("toggle", onToggle);
+                if (item.event) {
+                  const meta = document.createElement("div");
+                  meta.className = "stream-meta";
+                  meta.textContent = "event: " + item.event;
+                  fold.body.appendChild(meta);
+                }
+                fold.body.appendChild(renderStreamValue(item.parsed ?? item.data));
+              });
+              return fold.fold;
+            }
+            const STREAM_EVENT_LIMIT = 50;
+            const totalEvents = streamState.events.length;
+            for (let ei = 0; ei < totalEvents && ei < STREAM_EVENT_LIMIT; ei++) {
+              list.appendChild(renderEventItem(streamState.events[ei], ei));
+            }
+            if (totalEvents > STREAM_EVENT_LIMIT) {
+              const showAllBtn = document.createElement("button");
+              showAllBtn.className = "secondary";
+              showAllBtn.textContent = "显示全部 " + totalEvents + " 个流事件";
+              showAllBtn.style.marginTop = "8px";
+              showAllBtn.addEventListener("click", function onShowAll() {
+                showAllBtn.remove();
+                for (let ei = STREAM_EVENT_LIMIT; ei < totalEvents; ei++) {
+                  list.appendChild(renderEventItem(streamState.events[ei], ei));
+                }
+              });
+              list.appendChild(showAllBtn);
+            }
             listFold.body.appendChild(list);
             box.appendChild(listFold.fold);
           } else {

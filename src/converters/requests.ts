@@ -16,7 +16,6 @@ import {
   collapseText,
   createResponsesCustomToolSchema,
   fail,
-  isOpenAIResponsesMcpNamespace,
   joinOpenAIResponsesNamespacePath,
   makeDataUrl,
   normalizeReasoningEffortFromBudget,
@@ -525,7 +524,6 @@ function normalizeOpenAIResponsesToolOutput(output: any): NormalizedMessage["par
 function normalizeOpenAIResponsesTool(tool: any, namespace?: string): NormalizedTool[] {
   if (tool.type === "namespace") {
     const qualifiedNamespace = joinOpenAIResponsesNamespacePath(tool.name, namespace);
-    if (!isOpenAIResponsesMcpNamespace(qualifiedNamespace)) return [];
     return (tool.tools ?? []).flatMap((child: any) => normalizeOpenAIResponsesTool(child, qualifiedNamespace));
   }
 

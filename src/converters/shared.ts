@@ -211,24 +211,30 @@ export function isOpenAIResponsesMcpNamespace(namespace: string | null | undefin
 }
 
 export function joinOpenAIResponsesNamespacePath(name: string, namespace?: string | null): string {
-  return namespace ? `${namespace}${name}` : name;
+  if (!namespace) return name;
+  return namespace.endsWith("__") ? `${namespace}${name}` : `${namespace}__${name}`;
 }
 
 export function qualifyOpenAIResponsesToolName(name: string, namespace?: string | null): string {
-  return isOpenAIResponsesMcpNamespace(namespace) ? joinOpenAIResponsesNamespacePath(name, namespace) : name;
+  if (!namespace) return name;
+  return namespace.endsWith("__") ? namespace + name : namespace + "__" + name;
 }
 
 export function splitQualifiedOpenAIResponsesToolName(name: string): { name: string; namespace?: string } {
-  const match = OPENAI_RESPONSES_MCP_QUALIFIED_TOOL_PATTERN.exec(name);
-  if (!match) return { name };
-
-  const [, namespace, localName] = match;
-  if (!isOpenAIResponsesMcpNamespace(namespace) || !localName) return { name };
-
-  return {
-    namespace,
-    name: localName,
-  };
+  // First try the mcp__ pattern for backward compatibility
+  const mcpMatch = OPENAI_RESPONSES_MCP_QUALIFIED_TOOL_PATTERN.exec(name);
+  if (mcpMatch) {
+    const [, namespace, localName] = mcpMatch;
+    if (isOpenAIResponsesMcpNamespace(namespace) && localName) return { namespace, name: localName };
+  }
+  // Generic fallback: split at the first "__" (namespace__toolname)
+  const idx = name.indexOf("__");
+  if (idx > 0) {
+    const namespace = name.substring(0, idx);
+    const localName = name.substring(idx + 2);
+    if (namespace && localName) return { namespace, name: localName };
+  }
+  return { name };
 }
 
 export function makeDataUrl(mediaType: string, data: string): string {

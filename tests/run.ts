@@ -311,7 +311,7 @@ run("responses namespace tools flatten to qualified function names", () => {
   assert.equal((result.tools?.[0] as any).name, "mcp__mcpcenter__calendar_get_events");
 });
 
-run("responses non-mcp namespace tools stay unsupported in anthropic conversion", () => {
+run("responses non-mcp namespace tools flatten to qualified function names in anthropic conversion", () => {
   const result = responsesRequestToAnthropicMessageRequest({
     model: "gpt-5",
     input: "hello",
@@ -339,7 +339,9 @@ run("responses non-mcp namespace tools stay unsupported in anthropic conversion"
     ],
   } as any);
 
-  assert.equal(result.tools?.length ?? 0, 0);
+  assert.equal(result.tools?.length ?? 0, 1);
+  assert.equal((result.tools?.[0] as any).name, "crm__lookup_account");
+  assert.equal((result.tools?.[0] as any).description, "Look up an account");
 });
 
 run("responses namespace tool calls flatten to qualified function names", () => {
