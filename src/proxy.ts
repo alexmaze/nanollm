@@ -19,6 +19,7 @@ import {
   setRecordedAttemptResponseBody,
   setRecordedAttemptResponseMeta,
 } from "./record.js";
+import { runInNewContext } from "node:vm";
 import { ProxyAgent, fetch as undiciFetch } from "undici";
 
 export interface UpstreamRequestOptions {
@@ -105,6 +106,39 @@ function deepMerge(target: unknown, source: unknown): unknown {
 function applyModelBodyOverrides(config: ModelConfig, body: unknown): unknown {
   if (!config.body) return body;
   return deepMerge(body, config.body);
+}
+
+function applyModelBodyExpression(config: ModelConfig, body: unknown): unknown {
+  if (!config.bodyExpression) return body;
+
+  let result: unknown;
+  try {
+    result = runInNewContext(`(${config.bodyExpression})`, {
+      body,
+      console,
+      Date,
+      JSON,
+      Math,
+      structuredClone,
+    }, {
+      filename: `bodyExpression:${config.name}`,
+      timeout: 1000,
+    });
+  } catch (error) {
+    throw new Error(`Model '${config.name}' bodyExpression failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  if (result === undefined) {
+    throw new Error(`Model '${config.name}' bodyExpression returned undefined`);
+  }
+  if (result && typeof (result as { then?: unknown }).then === "function") {
+    throw new Error(`Model '${config.name}' bodyExpression must return synchronously`);
+  }
+  return result;
+}
+
+function applyModelBodyTransforms(config: ModelConfig, body: unknown): unknown {
+  return applyModelBodyExpression(config, applyModelBodyOverrides(config, body));
 }
 
 // ─── Normalize Response ─────────────────────────────────────────────────────
@@ -232,7 +266,7 @@ export async function passthroughRequest(
   rawBody: Record<string, unknown>,
   options?: UpstreamRequestOptions,
 ): Promise<{ json: unknown; timing: UpstreamTiming; usage?: NormalizedUsage }> {
-  const body = applyModelBodyOverrides(config, { ...rawBody, model: config.model, stream: false });
+  const body = applyModelBodyTransforms(config, { ...rawBody, model: config.model, stream: false });
   const { response, timing } = await upstreamFetch(config, JSON.stringify(body), false, options);
   const text = await response.text();
   setRecordedAttemptResponseBody({ index: options?.attemptIndex ?? 0, body: text });
@@ -246,7 +280,7 @@ export async function passthroughStreamRequest(
   rawBody: Record<string, unknown>,
   options?: UpstreamRequestOptions,
 ): Promise<{ body: ReadableStream<Uint8Array>; headers: Headers; timing: UpstreamTiming }> {
-  const body = applyModelBodyOverrides(config, { ...rawBody, model: config.model, stream: true });
+  const body = applyModelBodyTransforms(config, { ...rawBody, model: config.model, stream: true });
   const { response, timing } = await upstreamFetch(config, JSON.stringify(body), true, options);
   if (!response.body) throw new Error("Upstream returned no streaming body");
   return { body: response.body, headers: response.headers, timing };
@@ -263,7 +297,7 @@ export async function forwardRequest(
   normalized.model = config.model;
   normalized.image = config.image ?? true;
 
-  const body = applyModelBodyOverrides(config, applyOpenAIDefaults(config.provider, denormalizeRequest(config.provider, normalized)));
+  const body = applyModelBodyTransforms(config, applyOpenAIDefaults(config.provider, denormalizeRequest(config.provider, normalized)));
   const { response, timing } = await upstreamFetch(config, JSON.stringify(body), false, options);
   const text = await response.text();
   setRecordedAttemptResponseBody({ index: options?.attemptIndex ?? 0, body: text });
@@ -281,7 +315,7 @@ export async function forwardStreamRequest(
   normalized.model = config.model;
   normalized.image = config.image ?? true;
 
-  const body = applyModelBodyOverrides(config, applyOpenAIDefaults(config.provider, denormalizeRequest(config.provider, normalized)));
+  const body = applyModelBodyTransforms(config, applyOpenAIDefaults(config.provider, denormalizeRequest(config.provider, normalized)));
   const { response, timing } = await upstreamFetch(config, JSON.stringify(body), true, options);
   if (!response.body) throw new Error("Upstream returned no streaming body");
   return { body: response.body, upstreamFormat: config.provider, timing };

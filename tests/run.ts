@@ -2414,6 +2414,32 @@ models:
   }
 });
 
+run("config preserves model bodyExpression", () => {
+  const configPath = writeTempConfig(`
+models:
+  - name: alpha
+    provider: openai-chat
+    base_url: https://example.com/v1
+    api_key: test-key
+    model: upstream-alpha
+    bodyExpression: |
+      ({
+        ...body,
+        messages: body.messages?.map((message) => ({
+          ...message,
+          updatedAt: Date.now()
+        }))
+      })
+`);
+
+  try {
+    const config = loadConfig(configPath);
+    assert.match(config.models[0].bodyExpression ?? "", /updatedAt/);
+  } finally {
+    rmSync(dirname(configPath), { recursive: true, force: true });
+  }
+});
+
 run("config allows overriding record max_size", () => {
   const configPath = writeTempConfig(`
 record:
@@ -2990,6 +3016,47 @@ models:
     } finally {
       rmSync(dirname(configPath), { recursive: true, force: true });
     }
+  });
+});
+
+await runAsync("model bodyExpression rewrites passthrough upstream request body", async () => {
+  let upstreamBody: any;
+  await withHTTPServer(async (req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    req.on("end", () => {
+      upstreamBody = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ id: "chatcmpl_1", choices: [], usage: { prompt_tokens: 1, completion_tokens: 1 } }));
+    });
+  }, async (baseURL) => {
+    await passthroughRequest({
+      name: "alpha",
+      provider: "openai-chat",
+      base_url: baseURL,
+      api_key: "test-key",
+      model: "upstream-alpha",
+      body: {
+        metadata: { fromConfigBody: true },
+      },
+      bodyExpression: `({
+        ...body,
+        metadata: { ...body.metadata, fromExpression: true },
+        messages: body.messages?.map((message, index) => ({
+          ...message,
+          content: index === 0 ? message.content + " patched" : message.content,
+          updatedAt: 123
+        }))
+      })`,
+    }, {
+      model: "alpha",
+      messages: [{ role: "user", content: "hello" }],
+    });
+
+    assert.equal(upstreamBody.model, "upstream-alpha");
+    assert.equal(upstreamBody.stream, false);
+    assert.deepEqual(upstreamBody.metadata, { fromConfigBody: true, fromExpression: true });
+    assert.deepEqual(upstreamBody.messages, [{ role: "user", content: "hello patched", updatedAt: 123 }]);
   });
 });
 

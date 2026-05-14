@@ -16,6 +16,7 @@ export interface ModelConfig {
   proxy?: string;
   headers?: Record<string, string>;
   body?: Record<string, unknown>;
+  bodyExpression?: string;
 }
 
 export interface ServerConfig {
@@ -128,6 +129,10 @@ function normalizeModelConfig(model: ModelConfig, defaultTTFBTimeout?: number): 
     model.body && typeof model.body === "object"
       ? Object.fromEntries(Object.entries(model.body).map(([key, value]) => [key, parseJSONLikeValue(value)]))
       : undefined;
+  const bodyExpression =
+    model.bodyExpression === undefined || model.bodyExpression === null || model.bodyExpression === ""
+      ? undefined
+      : String(model.bodyExpression);
   const ttfb_timeout = normalizeTimeout(model.ttfb_timeout, `models.${model.name || "<unknown>"}.ttfb_timeout`) ?? defaultTTFBTimeout;
   const image = model.image === undefined ? true : !!model.image;
   const proxy = normalizeProxyUrl(model.proxy, `models.${model.name || "<unknown>"}.proxy`);
@@ -139,6 +144,7 @@ function normalizeModelConfig(model: ModelConfig, defaultTTFBTimeout?: number): 
     ...(ttfb_timeout !== undefined ? { ttfb_timeout } : {}),
     ...(headers ? { headers } : {}),
     ...(body ? { body } : {}),
+    ...(bodyExpression ? { bodyExpression } : {}),
   };
 }
 

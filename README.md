@@ -50,6 +50,14 @@ models:
       temperature: 1
       store: false
       text: '{"verbosity":"high"}'
+    bodyExpression: |
+      ({
+        ...body,
+        messages: body.messages?.map((message) => ({
+          ...message,
+          updatedAt: Date.now()
+        }))
+      })
   
   - name: claude-sonnet-4-6
     # messages规范
@@ -78,6 +86,27 @@ claude-sonnet-4-6
 gpt-5.4
 ```
 这样5个模型，其中`gpt-5.4`是兜底分组名，当使用这个模型的时候，会在下属列表的模型中寻找可用的模型，尝试顺序为按`max(0, 最近5min失败次数-1)`升序；如果分数相同，则保持配置里的原始顺序。
+
+### 动态请求体表达式
+
+`models[*].bodyExpression` 可以在请求发往上游前动态改写最终 request body。表达式运行时会拿到变量 `body`，并且必须同步返回新的 body；执行顺序是先应用 `body` 深度合并，再执行 `bodyExpression`。
+
+```yaml
+models:
+  - name: gpt-5.4-a
+    provider: openai-chat
+    base_url: https://example.com/v1
+    api_key: YOUR_KEY1
+    model: openai/gpt-5.4
+    bodyExpression: |
+      ({
+        ...body,
+        messages: body.messages?.map((message, index) => ({
+          ...message,
+          content: index === 0 ? `${message.content}\nextra prompt` : message.content
+        }))
+      })
+```
 
 ### 模型级 HTTP proxy
 
