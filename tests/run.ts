@@ -23,10 +23,11 @@ import {
 import { getPublicModelNames, loadConfig, resolveFallbackModels, resolveModelForRequest } from "../src/config.js";
 import { renderAdminConfigPage } from "../src/admin-config-page.js";
 import { ConfigManager } from "../src/config-manager.js";
-import { sortFallbackGroupMembers } from "../src/fallback.js";
+import { FallbackFailureTracker, FALLBACK_FAILURE_WINDOW_MS, sortFallbackGroupMembers } from "../src/fallback.js";
 import { getHTTPLogLevel, shouldEmitLog } from "../src/http-log.js";
 import { forwardRequest, passthroughRequest, passthroughStreamRequest, resolveProxyUrl } from "../src/proxy.js";
 import { renderRecordPage } from "../src/record-page.js";
+import { renderStatusPage } from "../src/status-page.js";
 import { handleServerStartupError } from "../src/startup-error.js";
 import {
   appendRecordedAttemptResponseBody,
@@ -2880,6 +2881,17 @@ run("fallback group members tolerate one failure before changing priority", () =
   assert.deepEqual(ordered, ["alpha", "beta", "gamma", "delta"]);
 });
 
+run("fallback failure tracker uses request start timestamps for the five-minute window", () => {
+  const tracker = new FallbackFailureTracker();
+  const now = Date.UTC(2026, 4, 15, 12, 10, 0);
+
+  tracker.recordFailure("alpha", now - FALLBACK_FAILURE_WINDOW_MS - 1);
+  tracker.recordFailure("beta", now - FALLBACK_FAILURE_WINDOW_MS);
+
+  assert.equal(tracker.getFailureCount("alpha", now), 0);
+  assert.equal(tracker.getFailureCount("beta", now), 1);
+});
+
 runThrows("config rejects invalid ttfb_timeout values", () => {
   const configPath = writeTempConfig(`
 server:
@@ -3619,6 +3631,35 @@ run("sqlite record store persists records and trims when max size shrinks", () =
   }
 });
 
+run("status page renders fallback group priority panel without top hint text", () => {
+  const store = new StatusStore();
+  const bucketStarts = store.listBuckets();
+  const html = renderStatusPage({
+    availableWindows: [1, 3, 6],
+    defaultWindowHours: 1,
+    refreshedAt: Date.UTC(2026, 4, 15, 12, 10, 0),
+    bucketStarts,
+    models: [
+      { name: "alpha", series: store.getModelSeries("alpha") },
+      { name: "beta", series: store.getModelSeries("beta") },
+    ],
+    fallbackGroups: [
+      { name: "group-a", members: ["beta", "alpha"] },
+    ],
+  });
+
+  assert.match(html, /Fallback Groups/);
+  assert.match(html, /id="groups"/);
+  assert.match(html, /id="range-total"/);
+  assert.match(html, /formatTokenM/);
+  assert.match(html, /renderRangeTotal/);
+  assert.match(html, /"fallbackGroups":\[\{"name":"group-a","members":\["beta","alpha"\]\}\]/);
+  assert.match(html, /renderFallbackGroups/);
+  assert.match(html, /class="layout"/);
+  assert.doesNotMatch(html, /只展示真实模型/);
+  assert.doesNotMatch(html, /id="range-meta"/);
+});
+
 run("record page renders query UI and JSON tree viewer", () => {
   const html = renderRecordPage({
     enabled: true,
@@ -3636,6 +3677,7 @@ run("record page renders query UI and JSON tree viewer", () => {
   assert.match(html, /renderStreamBody/);
   assert.match(html, /createCopyButton/);
   assert.match(html, /复制合并 JSON/);
+  assert.match(html, /renderStreamValue\(streamState\.reconstructed, \{ expandedDepth: 1 \}\)/);
   assert.match(html, /box-actions/);
   assert.match(html, /setInterval\(\(\) =>/);
   assert.match(html, /fetch\("\/record\/summary"/);
@@ -3689,6 +3731,7 @@ run("record page renders query UI and JSON tree viewer", () => {
   assert.match(html, /function flushEvent\(/);
   assert.match(html, /const lines = normalized\.split\("\\n"\)/);
   assert.match(html, /currentDataLines\[currentDataLines\.length - 1\] \+= "\\n" \+ line/);
+  assert.match(html, /if \(item\.content\[ci\] == null\) item\.content\[ci\] = part/);
   assert.doesNotMatch(html, /const blocks = normalized\.split\(/);
   assert.doesNotMatch(html, /开始采样/);
   assert.doesNotMatch(html, /停止采样/);

@@ -765,7 +765,10 @@ const SCRIPT = String.raw`
       }
 
       function createValueNode(value, options) {
-        const expanded = options?.expanded === true;
+        const depth = options?.depth ?? 0;
+        const expandedDepth = typeof options?.expandedDepth === "number" ? options.expandedDepth : null;
+        const expanded = options?.expanded === true || (expandedDepth !== null && depth < expandedDepth);
+        const childOptions = options ? { ...options, depth: depth + 1 } : undefined;
         if (value === null) {
           const span = document.createElement("span");
           span.className = "null";
@@ -789,7 +792,7 @@ const SCRIPT = String.raw`
               key.className = "key";
               key.textContent = index + ": ";
               entry.appendChild(key);
-              entry.appendChild(createValueNode(item, options));
+              entry.appendChild(createValueNode(item, childOptions));
               body.appendChild(entry);
             });
           }
@@ -824,7 +827,7 @@ const SCRIPT = String.raw`
               key.className = "key";
               key.textContent = keyName + ": ";
               entry.appendChild(key);
-              entry.appendChild(createValueNode(childValue, options));
+              entry.appendChild(createValueNode(childValue, childOptions));
               body.appendChild(entry);
             }
           }
@@ -1048,12 +1051,19 @@ const SCRIPT = String.raw`
           }
         }
 
-        // Aggregate content parts into message output items
+        // Aggregate content parts into message output items. Some streams include
+        // the completed message content in response.output_item.done, so only fill
+        // content indexes that are not already present on the final item.
         for (const [key, part] of contentBuffers) {
-          var oiStr = key.split("_")[0];
+          const [oiStr, ciStr] = key.split("_");
           const oi = Number(oiStr);
+          const ci = Number(ciStr);
           const item = outputItems.get(oi);
-          if (item && item.type === "message") {
+          if (!item || item.type !== "message") continue;
+          if (!Array.isArray(item.content)) item.content = [];
+          if (Number.isFinite(ci)) {
+            if (item.content[ci] == null) item.content[ci] = part;
+          } else {
             item.content.push(part);
           }
         }
@@ -1290,15 +1300,15 @@ const SCRIPT = String.raw`
         return response;
       }
 
-      function renderStreamValue(value) {
+      function renderStreamValue(value, options) {
         const wrapper = document.createElement("div");
         wrapper.className = "json-tree";
         if (value && typeof value === "object") {
-          wrapper.appendChild(createValueNode(value, { expanded: true }));
+          wrapper.appendChild(createValueNode(value, options ?? { expanded: true }));
         } else if (typeof value === "string") {
           wrapper.appendChild(createStringNode(value));
         } else {
-          wrapper.appendChild(createValueNode(value, { expanded: true }));
+          wrapper.appendChild(createValueNode(value, options ?? { expanded: true }));
         }
         return wrapper;
       }
@@ -1313,7 +1323,7 @@ const SCRIPT = String.raw`
         const reconstructed = reconstructStreamResponse(events);
         if (reconstructed) {
           const fold = createFold("完整响应");
-          fold.body.appendChild(renderStreamValue(reconstructed));
+          fold.body.appendChild(renderStreamValue(reconstructed, { expandedDepth: 1 }));
           parent.appendChild(fold.fold);
         }
 
@@ -1392,7 +1402,7 @@ const SCRIPT = String.raw`
           if (streamState?.events?.length) {
             if (streamState.reconstructed) {
               const fold = createFold("完整响应");
-              fold.body.appendChild(renderStreamValue(streamState.reconstructed));
+              fold.body.appendChild(renderStreamValue(streamState.reconstructed, { expandedDepth: 1 }));
               box.appendChild(fold.fold);
             }
 

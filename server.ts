@@ -12,7 +12,7 @@ import { getPublicModelNames, parseConfigText, parseSourceConfigDocument, resolv
 import { ConfigManager } from "./src/config-manager.js";
 import { getUpstreamURL } from "./src/proxy.js";
 import { forwardRequest, forwardStreamRequest, passthroughRequest, passthroughStreamRequest } from "./src/proxy.js";
-import { sortFallbackGroupMembers } from "./src/fallback.js";
+import { FallbackFailureTracker, sortFallbackGroupMembers } from "./src/fallback.js";
 import { SqliteStatusStore, StatusStore, type StatusStoreLike } from "./src/status.js";
 import { renderStatusPage } from "./src/status-page.js";
 import { renderRecordPage } from "./src/record-page.js";
@@ -213,8 +213,7 @@ type AdminConfigForm = {
   fallbackGroups: AdminFallbackDraft[];
 };
 
-const FAILURE_WINDOW_MS = 5 * 60 * 1000;
-const modelFailures = new Map<string, number[]>();
+const fallbackFailureTracker = new FallbackFailureTracker();
 const statusStore: StatusStoreLike = sqliteDb ? new SqliteStatusStore(sqliteDb) : new StatusStore();
 const ORANGE = "\x1b[38;5;214m";
 const RESET = "\x1b[0m";
@@ -402,22 +401,6 @@ function isStreamRequest(body: unknown): boolean {
   return b.stream === true;
 }
 
-function pruneModelFailures(name: string, now = Date.now()): number[] {
-  const recent = (modelFailures.get(name) ?? []).filter((timestamp) => now - timestamp <= FAILURE_WINDOW_MS);
-  modelFailures.set(name, recent);
-  return recent;
-}
-
-function recordModelFailure(name: string, now = Date.now()) {
-  const failures = pruneModelFailures(name, now);
-  failures.push(now);
-  modelFailures.set(name, failures);
-}
-
-function getModelFailureCount(name: string, now = Date.now()): number {
-  return pruneModelFailures(name, now).length;
-}
-
 function orange(message: string): string {
   return `${ORANGE}${message}${RESET}`;
 }
@@ -426,7 +409,7 @@ function getCandidateModels(config: ServerConfig, primaryModel: string): ModelCo
   const now = Date.now();
   const isFallbackGroup = primaryModel in config.fallback;
   if (isFallbackGroup) {
-    return sortFallbackGroupMembers(resolveFallbackModels(config, primaryModel), (name) => getModelFailureCount(name, now))
+    return sortFallbackGroupMembers(resolveFallbackModels(config, primaryModel), (name) => fallbackFailureTracker.getFailureCount(name, now))
       .map((name) => resolveModel(config, name))
       .filter((model): model is ModelConfig => Boolean(model));
   }
@@ -489,14 +472,19 @@ function tryParseJSON(text: string): unknown {
 
 function buildStatusPayload(config: ServerConfig) {
   const availableWindows = [1, 3, 6];
+  const now = Date.now();
   return {
     availableWindows,
     defaultWindowHours: 1,
-    refreshedAt: Date.now(),
+    refreshedAt: now,
     bucketStarts: statusStore.listBuckets(),
     models: config.models.map((model) => ({
       name: model.name,
       series: statusStore.getModelSeries(model.name),
+    })),
+    fallbackGroups: Object.entries(config.fallback).map(([name, members]) => ({
+      name,
+      members: sortFallbackGroupMembers(members, (memberName) => fallbackFailureTracker.getFailureCount(memberName, now)),
     })),
   };
 }
@@ -632,7 +620,7 @@ function createRoute(incomingFormat: StreamFormat) {
           return response;
         } catch (error) {
           const err = error as Error & { status?: number; upstream?: string; cause?: unknown };
-          recordModelFailure(modelConfig.name);
+          fallbackFailureTracker.recordFailure(modelConfig.name, requestStartedAt);
           statusStore.recordFailure(modelConfig.name, Date.now() - requestStartedAt, requestStartedAt);
           lastError = err;
           console.warn(

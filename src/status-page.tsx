@@ -14,12 +14,18 @@ export interface StatusPageModel {
   series: StatusCell[];
 }
 
+export interface StatusPageFallbackGroup {
+  name: string;
+  members: string[];
+}
+
 export interface StatusPagePayload {
   availableWindows: number[];
   defaultWindowHours: number;
   refreshedAt: number;
   bucketStarts: number[];
   models: StatusPageModel[];
+  fallbackGroups: StatusPageFallbackGroup[];
 }
 
 const STYLE = /* css */ String.raw`
@@ -49,27 +55,30 @@ const STYLE = /* css */ String.raw`
       .page {
         padding: 20px;
       }
+      .layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 340px;
+        gap: 18px;
+        align-items: start;
+      }
       .panel {
         background: var(--panel);
         border: 1px solid var(--border);
         border-radius: 18px;
         padding: 18px;
-        overflow-x: auto;
         box-shadow: var(--shadow);
+      }
+      .health-panel {
+        overflow-x: auto;
       }
       h1 {
         margin: 0;
         font-size: 26px;
         letter-spacing: 0.02em;
       }
-      .meta {
-        margin: 6px 0 0;
-        color: var(--muted);
-        font-size: 14px;
-      }
       .toolbar {
         display: flex;
-        justify-content: space-between;
+        justify-content: flex-start;
         align-items: center;
         gap: 16px;
         flex-wrap: wrap;
@@ -105,9 +114,26 @@ const STYLE = /* css */ String.raw`
         color: var(--text);
         box-shadow: 0 5px 12px rgba(110, 88, 57, 0.12);
       }
-      .range-meta {
+      .range-total {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        min-height: 42px;
         color: var(--muted);
         font-size: 13px;
+        white-space: nowrap;
+      }
+      .total-item {
+        display: inline-flex;
+        align-items: baseline;
+        gap: 4px;
+      }
+      .total-label {
+        color: var(--muted);
+      }
+      .total-value {
+        color: var(--text);
+        font-weight: 700;
       }
       .legend {
         display: flex;
@@ -238,12 +264,96 @@ const STYLE = /* css */ String.raw`
         text-align: right;
         color: #fff8f0;
       }
+      .groups-panel {
+        position: sticky;
+        top: 20px;
+      }
+      .groups-panel h2 {
+        margin: 0;
+        font-size: 18px;
+      }
+      .group-list {
+        display: grid;
+        gap: 12px;
+        margin-top: 16px;
+      }
+      .group-card {
+        border: 1px solid rgba(216, 205, 184, 0.72);
+        border-radius: 8px;
+        background: rgba(255, 248, 238, 0.72);
+        padding: 12px;
+      }
+      .group-title {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 10px;
+        margin-bottom: 10px;
+      }
+      .group-name {
+        min-width: 0;
+        overflow-wrap: anywhere;
+        font-size: 14px;
+        font-weight: 700;
+      }
+      .group-count {
+        flex: 0 0 auto;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .member-list {
+        display: grid;
+        gap: 7px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+      .member-item {
+        display: grid;
+        grid-template-columns: 26px minmax(0, 1fr);
+        align-items: center;
+        gap: 8px;
+        min-height: 28px;
+        color: var(--text);
+        font-size: 13px;
+      }
+      .member-rank {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 22px;
+        height: 22px;
+        border-radius: 999px;
+        background: rgba(216, 205, 184, 0.5);
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 700;
+      }
+      .member-name {
+        min-width: 0;
+        overflow-wrap: anywhere;
+      }
+      .empty-groups {
+        margin: 16px 0 0;
+        color: var(--muted);
+        font-size: 13px;
+      }
       @media (max-width: 900px) {
+        .layout {
+          grid-template-columns: 1fr;
+        }
+        .groups-panel {
+          position: static;
+        }
         .header, .row {
           grid-template-columns: 160px 1fr;
         }
         .toolbar {
           align-items: flex-start;
+        }
+        .range-total {
+          flex-wrap: wrap;
+          white-space: normal;
         }
       }
       @media (max-width: 640px) {
@@ -261,6 +371,9 @@ const STYLE = /* css */ String.raw`
           width: 100%;
           justify-content: space-between;
         }
+        .range-total {
+          width: 100%;
+        }
       }
 `;
 
@@ -268,8 +381,9 @@ const SCRIPT = String.raw`
       const STATUS_DATA = __INITIAL_PAYLOAD__;
       const TICKS_EL = document.getElementById("ticks");
       const ROWS_EL = document.getElementById("rows");
-      const RANGE_META_EL = document.getElementById("range-meta");
       const RANGE_BUTTONS_EL = document.getElementById("range-buttons");
+      const RANGE_TOTAL_EL = document.getElementById("range-total");
+      const GROUPS_EL = document.getElementById("groups");
       const TOOLTIP_EL = document.getElementById("tooltip");
       const TOOLTIP_TITLE_EL = document.getElementById("tooltip-title");
       const TOOLTIP_GRID_EL = document.getElementById("tooltip-grid");
@@ -305,6 +419,14 @@ const SCRIPT = String.raw`
         if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return "0K";
         const k = value / 1000;
         return k >= 100 ? Math.round(k) + "K" : k.toFixed(1) + "K";
+      }
+
+      function formatTokenM(value) {
+        if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return "0M";
+        const m = value / 1000000;
+        if (m >= 100) return Math.round(m) + "M";
+        if (m >= 10) return m.toFixed(1) + "M";
+        return m.toFixed(2) + "M";
       }
 
       function formatSpeed(tokensPerSec) {
@@ -392,6 +514,53 @@ const SCRIPT = String.raw`
         return button;
       }
 
+      function renderFallbackGroups() {
+        GROUPS_EL.textContent = "";
+        if (!statusData.fallbackGroups || statusData.fallbackGroups.length === 0) {
+          const empty = document.createElement("p");
+          empty.className = "empty-groups";
+          empty.textContent = "未配置 fallback 分组";
+          GROUPS_EL.appendChild(empty);
+          return;
+        }
+
+        for (const group of statusData.fallbackGroups) {
+          const card = document.createElement("section");
+          card.className = "group-card";
+
+          const title = document.createElement("div");
+          title.className = "group-title";
+          const name = document.createElement("div");
+          name.className = "group-name";
+          name.textContent = group.name;
+          const count = document.createElement("div");
+          count.className = "group-count";
+          count.textContent = String(group.members.length) + " models";
+          title.appendChild(name);
+          title.appendChild(count);
+
+          const members = document.createElement("ol");
+          members.className = "member-list";
+          group.members.forEach((member, index) => {
+            const item = document.createElement("li");
+            item.className = "member-item";
+            const rank = document.createElement("span");
+            rank.className = "member-rank";
+            rank.textContent = String(index + 1);
+            const memberName = document.createElement("span");
+            memberName.className = "member-name";
+            memberName.textContent = member;
+            item.appendChild(rank);
+            item.appendChild(memberName);
+            members.appendChild(item);
+          });
+
+          card.appendChild(title);
+          card.appendChild(members);
+          GROUPS_EL.appendChild(card);
+        }
+      }
+
       function summarizeSeries(series) {
         return series.reduce((acc, cell) => {
           acc.nonCacheInputTokens += cell.nonCacheInputTokens || 0;
@@ -405,6 +574,28 @@ const SCRIPT = String.raw`
           outputTokens: 0,
           totalStreamMs: 0,
         });
+      }
+
+      function renderRangeTotal(summary) {
+        RANGE_TOTAL_EL.textContent = "";
+        const entries = [
+          ["Input", formatTokenM(summary.nonCacheInputTokens)],
+          ["Cache", formatTokenM(summary.cacheReadInputTokens)],
+          ["Output", formatTokenM(summary.outputTokens)],
+        ];
+        for (const [label, value] of entries) {
+          const item = document.createElement("span");
+          item.className = "total-item";
+          const labelEl = document.createElement("span");
+          labelEl.className = "total-label";
+          labelEl.textContent = label;
+          const valueEl = document.createElement("span");
+          valueEl.className = "total-value";
+          valueEl.textContent = value;
+          item.appendChild(labelEl);
+          item.appendChild(valueEl);
+          RANGE_TOTAL_EL.appendChild(item);
+        }
       }
 
       function render(hours) {
@@ -423,11 +614,19 @@ const SCRIPT = String.raw`
         });
 
         ROWS_EL.textContent = "";
+        const rangeTotal = {
+          nonCacheInputTokens: 0,
+          cacheReadInputTokens: 0,
+          outputTokens: 0,
+        };
         for (const model of statusData.models) {
           const row = document.createElement("section");
           row.className = "row";
           const visibleSeries = model.series.slice(startIndex).reverse();
           const usageSummary = summarizeSeries(visibleSeries);
+          rangeTotal.nonCacheInputTokens += usageSummary.nonCacheInputTokens;
+          rangeTotal.cacheReadInputTokens += usageSummary.cacheReadInputTokens;
+          rangeTotal.outputTokens += usageSummary.outputTokens;
 
           const name = document.createElement("div");
           name.className = "name";
@@ -459,11 +658,11 @@ const SCRIPT = String.raw`
           ROWS_EL.appendChild(row);
         }
 
-        RANGE_META_EL.textContent =
-          "当前展示最近 " + hours + " 小时，每 5 秒自动刷新一次。";
         for (const button of RANGE_BUTTONS_EL.querySelectorAll(".range-button")) {
           button.classList.toggle("active", Number(button.dataset.hours) === currentHours);
         }
+        renderRangeTotal(rangeTotal);
+        renderFallbackGroups();
       }
 
       async function refreshStatus() {
@@ -500,26 +699,31 @@ function StatusPage({ payload }: { payload: StatusPagePayload }) {
       </head>
       <body>
     <main class="page">
-      <section class="panel">
-        <h1>Model Health</h1>
-        <p class="meta">只展示真实模型，按 5 分钟窗口记录到内存，最多保留最近 6 小时。</p>
-        <div class="toolbar">
-          <div class="range-buttons" id="range-buttons"></div>
-          <div class="range-meta" id="range-meta"></div>
-        </div>
-        <div class="legend">
-          <span><i class="dot green"></i>100%</span>
-          <span><i class="dot lightgreen"></i>80%+</span>
-          <span><i class="dot orange"></i>50%+</span>
-          <span><i class="dot red"></i>&lt;50%</span>
-          <span><i class="dot empty"></i>无数据</span>
-        </div>
-        <div class="header">
-          <div class="header-label">Models</div>
-          <div class="cells" id="ticks"></div>
-        </div>
-        <div id="rows"></div>
-      </section>
+      <div class="layout">
+        <section class="panel health-panel">
+          <h1>Model Health</h1>
+          <div class="toolbar">
+            <div class="range-buttons" id="range-buttons"></div>
+            <div class="range-total" id="range-total" aria-label="当前时间范围总用量"></div>
+          </div>
+          <div class="legend">
+            <span><i class="dot green"></i>100%</span>
+            <span><i class="dot lightgreen"></i>80%+</span>
+            <span><i class="dot orange"></i>50%+</span>
+            <span><i class="dot red"></i>&lt;50%</span>
+            <span><i class="dot empty"></i>无数据</span>
+          </div>
+          <div class="header">
+            <div class="header-label">Models</div>
+            <div class="cells" id="ticks"></div>
+          </div>
+          <div id="rows"></div>
+        </section>
+        <aside class="panel groups-panel">
+          <h2>Fallback Groups</h2>
+          <div class="group-list" id="groups"></div>
+        </aside>
+      </div>
     </main>
     <aside class="tooltip" id="tooltip" aria-hidden="true">
       <p class="tooltip-title" id="tooltip-title"></p>
