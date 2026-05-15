@@ -31,6 +31,10 @@ import {
 } from "./shared.js";
 import { isResponsesCustomToolName, markResponsesCustomToolName } from "../request-context.js";
 
+export interface AnthropicRequestConversionOptions {
+  ignoreInvalidHistory?: boolean;
+}
+
 export function normalizeOpenAIChatRequest(request: OpenAIChatRequest): NormalizedRequest {
   const tools = request.tools?.flatMap((tool) => {
     const normalized = normalizeOpenAIChatTool(tool as any);
@@ -160,6 +164,7 @@ export function normalizeAnthropicRequest(request: AnthropicMessagesRequest): No
 }
 
 export function denormalizeToOpenAIChatRequest(request: NormalizedRequest): OpenAIChatRequest {
+  const reasoningEffort = normalizeOpenAITargetReasoningEffort(request.reasoningEffort, request.thinkingBudgetTokens, "OpenAI Chat");
   return {
     model: request.model,
     messages: denormalizeOpenAIChatMessages(reorderMessagesForOpenAIChatToolResults(request.messages), request.image ?? true),
@@ -175,10 +180,8 @@ export function denormalizeToOpenAIChatRequest(request: NormalizedRequest): Open
     prompt_cache_key: request.promptCacheKey,
     prompt_cache_retention: request.promptCacheRetention ?? undefined,
     safety_identifier: request.safetyIdentifier,
-    reasoning_effort: ((request.reasoningEffort ?? normalizeReasoningEffortFromBudget(request.thinkingBudgetTokens)) ?? undefined) as OpenAIChatRequest["reasoning_effort"],
-    reasoning: (request.reasoningEffort ?? normalizeReasoningEffortFromBudget(request.thinkingBudgetTokens))
-      ? { effort: (request.reasoningEffort ?? normalizeReasoningEffortFromBudget(request.thinkingBudgetTokens)) as never }
-      : undefined,
+    reasoning_effort: (reasoningEffort ?? undefined) as OpenAIChatRequest["reasoning_effort"],
+    reasoning: reasoningEffort ? { effort: reasoningEffort as never } : undefined,
     verbosity: request.textVerbosity ?? undefined,
     response_format: denormalizeOpenAIChatResponseFormat(request.responseFormat),
     tools: request.tools?.map((tool) =>
@@ -287,6 +290,7 @@ function denormalizeOpenAIChatMessages(messages: NormalizedMessage[], imageEnabl
 }
 
 export function denormalizeToOpenAIResponsesRequest(request: NormalizedRequest): OpenAIResponsesRequest {
+  const reasoningEffort = normalizeOpenAITargetReasoningEffort(request.reasoningEffort, request.thinkingBudgetTokens, "OpenAI Responses");
   const instructionLines: string[] = [];
   let index = 0;
   while (index < request.messages.length) {
@@ -313,19 +317,18 @@ export function denormalizeToOpenAIResponsesRequest(request: NormalizedRequest):
     prompt_cache_key: request.promptCacheKey,
     prompt_cache_retention: request.promptCacheRetention ?? undefined,
     safety_identifier: request.safetyIdentifier,
-    reasoning: (request.reasoningEffort ?? normalizeReasoningEffortFromBudget(request.thinkingBudgetTokens))
-      ? { effort: (request.reasoningEffort ?? normalizeReasoningEffortFromBudget(request.thinkingBudgetTokens)) as never }
-      : undefined,
+    reasoning: reasoningEffort ? { effort: reasoningEffort as never } : undefined,
     text: request.responseFormat || request.textVerbosity ? { format: request.responseFormat ? denormalizeOpenAIResponsesFormat(request.responseFormat) : undefined, verbosity: request.textVerbosity ?? undefined } : undefined,
     tools: denormalizeOpenAIResponsesTools(request.tools),
     tool_choice: denormalizeOpenAIResponsesToolChoice(request.toolChoice),
   };
 }
 
-export function denormalizeToAnthropicRequest(request: NormalizedRequest): MessageCreateParamsBase {
+export function denormalizeToAnthropicRequest(request: NormalizedRequest, options?: AnthropicRequestConversionOptions): MessageCreateParamsBase {
   const systemBlocks: { type: "text"; text: string }[] = [];
   const filteredMessages: NormalizedMessage[] = [];
   const maxTokens = request.maxOutputTokens ?? 10240;
+  const ignoreInvalidHistory = options?.ignoreInvalidHistory ?? true;
   
   for (const message of request.messages) {
     if (message.role === "system" || message.role === "developer") {
@@ -344,7 +347,7 @@ export function denormalizeToAnthropicRequest(request: NormalizedRequest): Messa
     model: request.model,
     max_tokens: maxTokens,
     system: systemBlocks.length > 0 ? systemBlocks : undefined,
-    messages: mergeAnthropicMessages(anthropicMessages.flatMap((message) => denormalizeAnthropicMessage(message, request.sourceFormat === "anthropic"))),
+    messages: mergeAnthropicMessages(anthropicMessages.flatMap((message) => denormalizeAnthropicMessage(message, request.sourceFormat === "anthropic", ignoreInvalidHistory))),
     metadata: denormalizeAnthropicMetadata(request.metadata),
     service_tier: normalizeAnthropicServiceTier(request.serviceTier),
     stream: request.stream,
@@ -446,12 +449,12 @@ function normalizeOpenAIResponsesInput(input: string | any[]): NormalizedMessage
     const itemType = item.type ?? "message";
     if (itemType === "message") return [normalizeOpenAIResponsesMessage(item)];
     if (itemType === "reasoning") {
-      const thinkingFromSummary = item.summary?.map((part: any) => ({ type: "thinking" as const, thinking: part.text })) ?? [];
-      const thinkingFromContent = item.content?.map((part: any) => ({ type: "thinking" as const, thinking: part.text })) ?? [];
-      const redactedThinking = item.encrypted_content && !item.summary?.length && !item.content?.length ? [{ type: "redacted_thinking" as const, data: item.encrypted_content }] : [];
+      const reasoningParts = Array.isArray(item.summary) && item.summary.length > 0 ? item.summary : Array.isArray(item.content) ? item.content : [];
+      const thinking = reasoningParts.map((part: any) => ({ type: "thinking" as const, thinking: part.text }));
+      const redactedThinking = item.encrypted_content && thinking.length === 0 ? [{ type: "redacted_thinking" as const, data: item.encrypted_content }] : [];
       return [{
         role: "assistant",
-        parts: [...thinkingFromSummary, ...thinkingFromContent, ...redactedThinking],
+        parts: [...thinking, ...redactedThinking],
       }];
     }
     if (itemType === "function_call") {
@@ -830,16 +833,6 @@ function denormalizeOpenAIResponsesMessage(message: NormalizedMessage, preserveT
       return contentParts.length > 0 ? [{ type: "message", role: message.role, content: contentParts }] : [];
     }
     case "assistant": {
-      const reasoningItems = message.parts
-        .filter((part) => part.type === "thinking")
-        .map((part, index) => ({
-          id: `reasoning_${index}`,
-          type: "reasoning",
-          summary: [{ type: "summary_text", text: part.thinking }],
-          content: [{ type: "reasoning_text", text: part.thinking }],
-          status: "completed",
-        }));
-      
       const contentParts = message.parts
         .filter((part) => part.type !== "thinking" && part.type !== "redacted_thinking")
         .map((part) => {
@@ -873,7 +866,6 @@ function denormalizeOpenAIResponsesMessage(message: NormalizedMessage, preserveT
       }) ?? [];
       
       return [
-        ...reasoningItems,
         ...(contentParts.length > 0 || toolCallItems.length > 0 ? [{ type: "message", role: "assistant", content: contentParts }] : []),
         ...toolCallItems,
       ];
@@ -885,12 +877,12 @@ function denormalizeOpenAIResponsesMessage(message: NormalizedMessage, preserveT
   }
 }
 
-function denormalizeAnthropicMessage(message: NormalizedMessage, preserveThinking: boolean): MessageParam[] {
+function denormalizeAnthropicMessage(message: NormalizedMessage, preserveThinking: boolean, ignoreInvalidHistory: boolean): MessageParam[] {
   switch (message.role) {
     case "user":
       return [{ role: "user", content: denormalizeAnthropicUserParts(message.parts) }];
     case "assistant": {
-      const content = denormalizeAnthropicAssistantParts(message, preserveThinking);
+      const content = denormalizeAnthropicAssistantParts(message, preserveThinking, ignoreInvalidHistory);
       return content.length > 0 ? [{ role: "assistant", content }] : [];
     }
     case "tool":
@@ -916,11 +908,14 @@ function denormalizeAnthropicUserParts(parts: NormalizedMessage["parts"]): any {
   });
 }
 
-function denormalizeAnthropicAssistantParts(message: NormalizedMessage, preserveThinking: boolean): any[] {
+function denormalizeAnthropicAssistantParts(message: NormalizedMessage, preserveThinking: boolean, ignoreInvalidHistory: boolean): any[] {
   const blocks: any[] = message.parts.flatMap((part) => {
     if (part.type === "text" || part.type === "refusal") return { type: "text", text: part.text, citations: null };
-    if (part.type === "thinking") return [{ type: "thinking", thinking: part.thinking, signature: part.signature ?? "" }];
-    if (part.type === "redacted_thinking") return [];
+    if (part.type === "thinking") {
+      if (ignoreInvalidHistory && (part.signature === undefined || part.signature === null || part.signature === "")) return [];
+      return [{ type: "thinking", thinking: part.thinking, signature: part.signature ?? "" }];
+    }
+    if (part.type === "redacted_thinking") return preserveThinking ? [{ type: "redacted_thinking", data: part.data }] : [];
     return { type: "text", text: collapseText([part]), citations: null };
   });
   for (const toolCall of message.toolCalls ?? []) {
@@ -1114,6 +1109,15 @@ function denormalizeAnthropicOutputConfig(responseFormat: NormalizedRequest["res
 function denormalizeAnthropicThinking(reasoningEffort: string | null | undefined, thinkingBudgetTokens: number | null | undefined) {
   if (!reasoningEffort && thinkingBudgetTokens == null) return undefined;
   return { type: "adaptive" as const };
+}
+
+function normalizeOpenAITargetReasoningEffort(reasoningEffort: string | null | undefined, thinkingBudgetTokens: number | null | undefined, target: string) {
+  const effort = reasoningEffort ?? normalizeReasoningEffortFromBudget(thinkingBudgetTokens);
+  if (effort === "max") {
+    console.warn(`[CONVERTER] Mapping reasoning effort "max" to "xhigh" for ${target}; OpenAI does not support "max".`);
+    return "xhigh";
+  }
+  return effort;
 }
 
 function normalizeOpenAIServiceTier(tier: string | null | undefined): OpenAIChatRequest["service_tier"] | undefined {

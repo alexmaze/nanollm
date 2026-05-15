@@ -69,14 +69,14 @@ function getAuthHeaders(config: ModelConfig): Record<string, string> {
 
 // ─── Denormalize Request ────────────────────────────────────────────────────
 
-function denormalizeRequest(provider: StreamFormat, normalized: NormalizedRequest): unknown {
-  switch (provider) {
+function denormalizeRequest(config: ModelConfig, normalized: NormalizedRequest): unknown {
+  switch (config.provider) {
     case "openai-chat":
       return denormalizeToOpenAIChatRequest(normalized);
     case "openai-responses":
       return denormalizeToOpenAIResponsesRequest(normalized);
     case "anthropic":
-      return denormalizeToAnthropicRequest(normalized);
+      return denormalizeToAnthropicRequest(normalized, { ignoreInvalidHistory: config.ignore_invalid_history ?? true });
   }
 }
 
@@ -139,6 +139,29 @@ function applyModelBodyExpression(config: ModelConfig, body: unknown): unknown {
 
 function applyModelBodyTransforms(config: ModelConfig, body: unknown): unknown {
   return applyModelBodyExpression(config, applyModelBodyOverrides(config, body));
+}
+
+const OPENAI_RESPONSES_UNSTORED_ITEM_ID_TYPES = new Set(["message", "reasoning", "function_call", "custom_tool_call"]);
+
+function stripOpenAIResponsesUnstoredItemIds(config: ModelConfig, body: unknown): unknown {
+  if (config.provider !== "openai-responses" || !isPlainObject(body) || body.store !== false || !Array.isArray(body.input)) return body;
+
+  let changed = false;
+  const input = body.input.map((item) => {
+    if (!isPlainObject(item) || typeof item.type !== "string" || !OPENAI_RESPONSES_UNSTORED_ITEM_ID_TYPES.has(item.type) || !("id" in item)) return item;
+    changed = true;
+    const withoutId = { ...item };
+    delete withoutId.id;
+    return withoutId;
+  });
+  return changed ? { ...body, input } : body;
+}
+
+function preparePassthroughBody(config: ModelConfig, rawBody: Record<string, unknown>, stream: boolean): unknown {
+  return stripOpenAIResponsesUnstoredItemIds(
+    config,
+    applyModelBodyTransforms(config, { ...rawBody, model: config.model, stream }),
+  );
 }
 
 // ─── Normalize Response ─────────────────────────────────────────────────────
@@ -266,7 +289,7 @@ export async function passthroughRequest(
   rawBody: Record<string, unknown>,
   options?: UpstreamRequestOptions,
 ): Promise<{ json: unknown; timing: UpstreamTiming; usage?: NormalizedUsage }> {
-  const body = applyModelBodyTransforms(config, { ...rawBody, model: config.model, stream: false });
+  const body = preparePassthroughBody(config, rawBody, false);
   const { response, timing } = await upstreamFetch(config, JSON.stringify(body), false, options);
   const text = await response.text();
   setRecordedAttemptResponseBody({ index: options?.attemptIndex ?? 0, body: text });
@@ -280,7 +303,7 @@ export async function passthroughStreamRequest(
   rawBody: Record<string, unknown>,
   options?: UpstreamRequestOptions,
 ): Promise<{ body: ReadableStream<Uint8Array>; headers: Headers; timing: UpstreamTiming }> {
-  const body = applyModelBodyTransforms(config, { ...rawBody, model: config.model, stream: true });
+  const body = preparePassthroughBody(config, rawBody, true);
   const { response, timing } = await upstreamFetch(config, JSON.stringify(body), true, options);
   if (!response.body) throw new Error("Upstream returned no streaming body");
   return { body: response.body, headers: response.headers, timing };
@@ -297,7 +320,7 @@ export async function forwardRequest(
   normalized.model = config.model;
   normalized.image = config.image ?? true;
 
-  const body = applyModelBodyTransforms(config, applyOpenAIDefaults(config.provider, denormalizeRequest(config.provider, normalized)));
+  const body = applyModelBodyTransforms(config, applyOpenAIDefaults(config.provider, denormalizeRequest(config, normalized)));
   const { response, timing } = await upstreamFetch(config, JSON.stringify(body), false, options);
   const text = await response.text();
   setRecordedAttemptResponseBody({ index: options?.attemptIndex ?? 0, body: text });
@@ -315,7 +338,7 @@ export async function forwardStreamRequest(
   normalized.model = config.model;
   normalized.image = config.image ?? true;
 
-  const body = applyModelBodyTransforms(config, applyOpenAIDefaults(config.provider, denormalizeRequest(config.provider, normalized)));
+  const body = applyModelBodyTransforms(config, applyOpenAIDefaults(config.provider, denormalizeRequest(config, normalized)));
   const { response, timing } = await upstreamFetch(config, JSON.stringify(body), true, options);
   if (!response.body) throw new Error("Upstream returned no streaming body");
   return { body: response.body, upstreamFormat: config.provider, timing };

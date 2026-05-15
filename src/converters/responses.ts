@@ -82,10 +82,8 @@ export function normalizeOpenAIResponsesResponse(response: OpenAIResponsesRespon
     }
 
     if (item.type === "reasoning") {
-      for (const part of item.content ?? []) {
-        parts.push({ type: "thinking", thinking: part.text });
-      }
-      for (const part of item.summary ?? []) {
+      const reasoningParts = item.content?.length ? item.content : item.summary ?? [];
+      for (const part of reasoningParts) {
         parts.push({ type: "thinking", thinking: part.text });
       }
       if (item.encrypted_content) {
@@ -209,10 +207,9 @@ export function denormalizeToOpenAIResponsesResponse(response: NormalizedRespons
     // metadata: null,
     output: [
       ...reasoningParts.map((part, index) => ({
-        id: `reasoning_${index}`,
+        id: `rs_${index}`,
         type: "reasoning",
         summary: [{ type: "summary_text", text: part.thinking }],
-        content: [{ type: "reasoning_text", text: part.thinking }],
         status: "completed",
       })),
       ...(visibleParts.length > 0

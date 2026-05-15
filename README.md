@@ -65,6 +65,7 @@ models:
     base_url: https://example.com/v1
     api_key: ${YOUR_KEY3_FROM_ENV_VAR}
     model: claude-sonnet-4-6
+    ignore_invalid_history: true # optional, default true; Anthropic转换时丢弃空signature的thinking历史
 
 fallback:
   gpt-5.4:
@@ -106,6 +107,22 @@ models:
           content: index === 0 ? `${message.content}\nextra prompt` : message.content
         }))
       })
+```
+
+### Anthropic 历史 thinking 签名
+
+`models[*].ignore_invalid_history` 目前只影响 `provider: anthropic` 的协议转换，默认值为 `true`。当 OpenAI Chat/Responses 历史消息里的明文 reasoning 被转换到 Anthropic Messages 时，如果对应 `thinking` block 没有 `signature` 或 `signature` 为空字符串，默认会丢弃该 `thinking` block，避免 Anthropic 上游校验空签名时报错。
+
+如果需要保留旧行为，可以显式设置为 `false`，这时无签名 thinking 会继续带着空字符串 `signature` 发往 Anthropic 上游：
+
+```yaml
+models:
+  - name: claude-sonnet
+    provider: anthropic
+    base_url: https://example.com/v1
+    api_key: YOUR_KEY
+    model: claude-sonnet-4-6
+    ignore_invalid_history: false
 ```
 
 ### 模型级 HTTP proxy

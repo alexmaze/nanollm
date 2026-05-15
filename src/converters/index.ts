@@ -14,6 +14,7 @@ import {
   normalizeOpenAIChatRequest,
   normalizeOpenAIResponsesRequest,
 } from "./requests.js";
+import type { AnthropicRequestConversionOptions } from "./requests.js";
 import {
   denormalizeToAnthropicResponse,
   denormalizeToOpenAIChatResponse,
@@ -33,8 +34,8 @@ export function responsesRequestToChatParams(request: OpenAIResponsesRequest): O
   return denormalizeToOpenAIChatRequest(normalized);
 }
 
-export function chatParamsToAnthropicMessageRequest(request: OpenAIChatRequest): AnthropicMessagesRequest {
-  return denormalizeToAnthropicRequest(normalizeOpenAIChatRequest(request));
+export function chatParamsToAnthropicMessageRequest(request: OpenAIChatRequest, options?: AnthropicRequestConversionOptions): AnthropicMessagesRequest {
+  return denormalizeToAnthropicRequest(normalizeOpenAIChatRequest(request), options);
 }
 
 export function anthropicMessageRequestToChatParams(request: AnthropicMessagesRequest): OpenAIChatRequest {
@@ -43,8 +44,8 @@ export function anthropicMessageRequestToChatParams(request: AnthropicMessagesRe
   return denormalizeToOpenAIChatRequest(normalized);
 }
 
-export function responsesRequestToAnthropicMessageRequest(request: OpenAIResponsesRequest): AnthropicMessagesRequest {
-  return denormalizeToAnthropicRequest(normalizeOpenAIResponsesRequest(request));
+export function responsesRequestToAnthropicMessageRequest(request: OpenAIResponsesRequest, options?: AnthropicRequestConversionOptions): AnthropicMessagesRequest {
+  return denormalizeToAnthropicRequest(normalizeOpenAIResponsesRequest(request), options);
 }
 
 export function anthropicMessageRequestToResponsesRequest(request: AnthropicMessagesRequest): OpenAIResponsesRequest {

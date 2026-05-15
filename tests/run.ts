@@ -77,6 +77,20 @@ async function runAsync(name: string, fn: () => Promise<void>) {
   }
 }
 
+function captureConsoleWarn(fn: () => void): string[] {
+  const originalWarn = console.warn;
+  const messages: string[] = [];
+  console.warn = (...args: any[]) => {
+    messages.push(args.map(String).join(" "));
+  };
+  try {
+    fn();
+  } finally {
+    console.warn = originalWarn;
+  }
+  return messages;
+}
+
 async function withHTTPServer(
   handler: http.RequestListener,
   fn: (baseURL: string) => Promise<void>,
@@ -1826,7 +1840,7 @@ run("chat response round-trip through anthropic preserves tool call name", () =>
   assert.equal((chat.choices[0].message.tool_calls?.[0] as any).function.name, "lookup");
 });
 
-run("anthropic request thinking block is preserved in responses request without encrypted content", () => {
+run("anthropic request thinking block is not synthesized as responses reasoning input", () => {
   const responses = anthropicMessageRequestToResponsesRequest({
     model: "claude-sonnet-4-5",
     max_tokens: 1024,
@@ -1849,13 +1863,9 @@ run("anthropic request thinking block is preserved in responses request without 
   });
 
   const input = responses.input as Array<{ type: string }>;
-  assert.equal(input.length, 2);
-  assert.equal(input[0].type, "reasoning");
-  assert.deepEqual((input[0] as any).summary, [{ type: "summary_text", text: "I should call the weather tool." }]);
-  assert.deepEqual((input[0] as any).content, [{ type: "reasoning_text", text: "I should call the weather tool." }]);
-  assert.equal((input[0] as any).encrypted_content, undefined);
-  assert.equal(input[1].type, "message");
-  assert.equal((input[1] as any).content[0].text, "Let me check.");
+  assert.equal(input.length, 1);
+  assert.equal(input[0].type, "message");
+  assert.equal((input[0] as any).content[0].text, "Let me check.");
 });
 
 run("anthropic response thinking block is preserved in responses response without encrypted content", () => {
@@ -1893,14 +1903,15 @@ run("anthropic response thinking block is preserved in responses response withou
 
   assert.equal((responses.output as any[]).length, 2);
   assert.equal((responses.output[0] as any).type, "reasoning");
+  assert.match((responses.output[0] as any).id, /^rs_/);
   assert.deepEqual((responses.output[0] as any).summary, [{ type: "summary_text", text: "Need to reason first." }]);
-  assert.deepEqual((responses.output[0] as any).content, [{ type: "reasoning_text", text: "Need to reason first." }]);
+  assert.equal((responses.output[0] as any).content, undefined);
   assert.equal((responses.output[0] as any).encrypted_content, undefined);
   assert.equal((responses.output[1] as any).type, "message");
   assert.equal(((responses.output[1] as any).content[0] ?? {}).text, "final answer");
 });
 
-run("responses request reasoning block preserves plaintext and drops encrypted content in anthropic request", () => {
+run("responses request reasoning block drops unsigned plaintext in anthropic request by default", () => {
   const anthropic = responsesRequestToAnthropicMessageRequest({
     model: "gpt-5",
     input: [
@@ -1919,14 +1930,36 @@ run("responses request reasoning block preserves plaintext and drops encrypted c
   } as any);
 
   assert.equal((anthropic.messages as any[]).length, 2);
-  assert.equal(((anthropic.messages[0] as any).content ?? [])[0].type, "thinking");
-  assert.equal(((anthropic.messages[0] as any).content ?? [])[0].thinking, "internal summary");
-  assert.equal(((anthropic.messages[0] as any).content ?? [])[1].type, "thinking");
-  assert.equal(((anthropic.messages[0] as any).content ?? [])[1].thinking, "internal detail");
-  assert.equal(((anthropic.messages[0] as any).content ?? [])[2].type, "text");
-  assert.equal(((anthropic.messages[0] as any).content ?? [])[2].text, "visible answer");
+  assert.equal(((anthropic.messages[0] as any).content ?? [])[0].type, "text");
+  assert.equal(((anthropic.messages[0] as any).content ?? [])[0].text, "visible answer");
   assert.equal((anthropic.messages[1] as any).role, "user");
   assert.equal((anthropic.messages[1] as any).content, "go on");
+});
+
+run("responses request reasoning block keeps empty signature when invalid history is allowed", () => {
+  const anthropic = responsesRequestToAnthropicMessageRequest({
+    model: "gpt-5",
+    input: [
+      {
+        type: "reasoning",
+        summary: [{ type: "summary_text", text: "internal summary" }],
+        content: [{ type: "reasoning_text", text: "internal detail" }],
+        encrypted_content: "enc_1",
+      },
+      {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "visible answer" }],
+      },
+    ],
+  } as any, { ignoreInvalidHistory: false });
+
+  const content = (anthropic.messages as any[])[0].content ?? [];
+  assert.equal(content[0].type, "thinking");
+  assert.equal(content[0].thinking, "internal summary");
+  assert.equal(content[0].signature, "");
+  assert.equal(content[1].type, "text");
+  assert.equal(content[1].text, "visible answer");
 });
 
 run("anthropic assistant thinking block becomes top-level chat reasoning fields", () => {
@@ -1976,7 +2009,7 @@ run("image disabled chat assistant without thinking gets empty reasoning_content
   assert.equal(assistant.reasoning, "");
 });
 
-run("chat assistant top-level reasoning fields survive anthropic round-trip", () => {
+run("chat assistant top-level reasoning fields drop unsigned thinking in anthropic request by default", () => {
   const anthropic = chatParamsToAnthropicMessageRequest({
     model: "gpt-5",
     messages: [
@@ -1993,8 +2026,57 @@ run("chat assistant top-level reasoning fields survive anthropic round-trip", ()
 
   const assistant = (anthropic.messages as any[])[0];
   assert.equal(assistant.role, "assistant");
+  assert.equal(assistant.content[0].type, "text");
+  assert.equal(assistant.content[0].text, "visible answer");
+});
+
+run("chat assistant top-level reasoning fields keep empty signature when invalid history is allowed", () => {
+  const anthropic = chatParamsToAnthropicMessageRequest({
+    model: "gpt-5",
+    messages: [
+      {
+        role: "assistant",
+        content: "visible answer",
+        thinking: "internal detail",
+        reasoning: "internal detail",
+        reasoning_content: "internal detail",
+      } as any,
+      { role: "user", content: "go on" },
+    ],
+  }, { ignoreInvalidHistory: false });
+
+  const assistant = (anthropic.messages as any[])[0];
+  assert.equal(assistant.role, "assistant");
   assert.equal(assistant.content[0].type, "thinking");
   assert.equal(assistant.content[0].thinking, "internal detail");
+  assert.equal(assistant.content[0].signature, "");
+  assert.equal(assistant.content[1].type, "text");
+  assert.equal(assistant.content[1].text, "visible answer");
+});
+
+run("chat assistant thinking content drops null and empty signatures but keeps signed thinking", () => {
+  const anthropic = chatParamsToAnthropicMessageRequest({
+    model: "gpt-5",
+    messages: [
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "null signature", signature: null },
+          { type: "thinking", thinking: "empty signature", signature: "" },
+          { type: "thinking", thinking: "signed thinking", signature: "sig_1" },
+          { type: "text", text: "visible answer" },
+        ],
+      } as any,
+      { role: "user", content: "go on" },
+    ],
+  });
+
+  const assistant = (anthropic.messages as any[])[0];
+  assert.equal(assistant.role, "assistant");
+  assert.equal(assistant.content.length, 2);
+  assert.equal(assistant.content[0].type, "thinking");
+  assert.equal(assistant.content[0].thinking, "signed thinking");
+  assert.equal(assistant.content[0].signature, "sig_1");
   assert.equal(assistant.content[1].type, "text");
   assert.equal(assistant.content[1].text, "visible answer");
 });
@@ -2010,7 +2092,7 @@ run("responses response reasoning block preserves plaintext and drops encrypted 
     model: "gpt-5",
     output: [
       {
-        id: "reasoning_0",
+        id: "rs_0",
         type: "reasoning",
         summary: [{ type: "summary_text", text: "internal summary" }],
         content: [{ type: "reasoning_text", text: "internal detail" }],
@@ -2030,13 +2112,11 @@ run("responses response reasoning block preserves plaintext and drops encrypted 
     text: { format: { type: "text" } },
   } as any);
 
-  assert.equal((anthropic.content as any[]).length, 3);
+  assert.equal((anthropic.content as any[]).length, 2);
   assert.equal((anthropic.content[0] as any).type, "thinking");
   assert.equal((anthropic.content[0] as any).thinking, "internal detail");
-  assert.equal((anthropic.content[1] as any).type, "thinking");
-  assert.equal((anthropic.content[1] as any).thinking, "internal summary");
-  assert.equal((anthropic.content[2] as any).type, "text");
-  assert.equal((anthropic.content[2] as any).text, "visible answer");
+  assert.equal((anthropic.content[1] as any).type, "text");
+  assert.equal((anthropic.content[1] as any).text, "visible answer");
 });
 
 run("anthropic response usage total includes cache read and write when converted to responses", () => {
@@ -2129,6 +2209,39 @@ run("anthropic thinking budget 4000 maps to responses medium reasoning.effort", 
   assert.deepEqual((responses as any).reasoning, { effort: "medium" });
 });
 
+run("anthropic max effort maps to chat xhigh reasoning with downgrade log", () => {
+  let chat: any;
+  const warnings = captureConsoleWarn(() => {
+    chat = anthropicMessageRequestToChatParams({
+      model: "claude-sonnet-4-5",
+      max_tokens: 12000,
+      thinking: { type: "adaptive" },
+      output_config: { effort: "max" },
+      messages: [{ role: "user", content: "hi" }],
+    } as any);
+  });
+
+  assert.equal(chat.reasoning_effort, "xhigh");
+  assert.deepEqual(chat.reasoning, { effort: "xhigh" });
+  assert.deepEqual(warnings, ['[CONVERTER] Mapping reasoning effort "max" to "xhigh" for OpenAI Chat; OpenAI does not support "max".']);
+});
+
+run("anthropic max effort maps to responses xhigh reasoning with downgrade log", () => {
+  let responses: any;
+  const warnings = captureConsoleWarn(() => {
+    responses = anthropicMessageRequestToResponsesRequest({
+      model: "claude-sonnet-4-5",
+      max_tokens: 12000,
+      thinking: { type: "adaptive" },
+      output_config: { effort: "max" },
+      messages: [{ role: "user", content: "hi" }],
+    } as any);
+  });
+
+  assert.deepEqual(responses.reasoning, { effort: "xhigh" });
+  assert.deepEqual(warnings, ['[CONVERTER] Mapping reasoning effort "max" to "xhigh" for OpenAI Responses; OpenAI does not support "max".']);
+});
+
 run("chat medium reasoning maps to anthropic adaptive thinking", () => {
   const anthropic = chatParamsToAnthropicMessageRequest({
     model: "gpt-4o-mini",
@@ -2210,14 +2323,13 @@ run("responses anthropic conversion batches consecutive assistants with tool cal
     ],
   } as any);
 
-  // assistant(thinking, tool_use foo, tool_use bar) + user(tool_result a, tool_result b)
+  // assistant(tool_use foo, tool_use bar) + user(tool_result a, tool_result b)
   assert.equal(result.messages.length, 2);
   assert.equal(result.messages[0].role, "assistant");
   const assistantContent = result.messages[0].content as Array<{ type: string }>;
-  assert.equal(assistantContent.length, 3); // thinking, tool_use foo, tool_use bar
-  assert.equal(assistantContent[0].type, "thinking");
+  assert.equal(assistantContent.length, 2); // tool_use foo, tool_use bar
+  assert.equal(assistantContent[0].type, "tool_use");
   assert.equal(assistantContent[1].type, "tool_use");
-  assert.equal(assistantContent[2].type, "tool_use");
   assert.equal(result.messages[1].role, "user");
   const userContent = result.messages[1].content as Array<{ type: string }>;
   assert.equal(userContent.length, 2); // tool_result a, tool_result b
@@ -2285,6 +2397,38 @@ models:
   try {
     const config = loadConfig(configPath);
     assert.equal(config.models[0].image, false);
+  } finally {
+    rmSync(dirname(configPath), { recursive: true, force: true });
+  }
+});
+
+run("config defaults ignore_invalid_history to true and allows disabling it", () => {
+  const configPath = writeTempConfig(`
+models:
+  - name: alpha
+    provider: anthropic
+    base_url: https://example.com/v1
+    api_key: test-key
+    model: claude-sonnet-4-6
+  - name: beta
+    provider: anthropic
+    base_url: https://example.com/v1
+    api_key: test-key
+    model: claude-opus-4-6
+    ignore_invalid_history: false
+  - name: gamma
+    provider: anthropic
+    base_url: https://example.com/v1
+    api_key: test-key
+    model: claude-haiku-4-5
+    ignore_invalid_history: "false"
+`);
+
+  try {
+    const config = loadConfig(configPath);
+    assert.equal(config.models[0].ignore_invalid_history, true);
+    assert.equal(config.models[1].ignore_invalid_history, false);
+    assert.equal(config.models[2].ignore_invalid_history, false);
   } finally {
     rmSync(dirname(configPath), { recursive: true, force: true });
   }
@@ -3019,6 +3163,43 @@ models:
   });
 });
 
+await runAsync("openai responses passthrough drops persisted item ids when store is false", async () => {
+  let upstreamBody: any;
+  await withHTTPServer(async (req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    req.on("end", () => {
+      upstreamBody = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ id: "resp_1", object: "response", usage: { input_tokens: 1, output_tokens: 1 } }));
+    });
+  }, async (baseURL) => {
+    await passthroughRequest({
+      name: "alpha",
+      provider: "openai-responses",
+      base_url: baseURL,
+      api_key: "test-key",
+      model: "upstream-alpha",
+    }, {
+      model: "alpha",
+      store: false,
+      input: [
+        { id: "rs_0", type: "reasoning", summary: [{ type: "summary_text", text: "internal" }], status: "completed" },
+        { id: "fc_0", type: "function_call", call_id: "call_1", name: "lookup", arguments: "{\"city\":\"Shanghai\"}", status: "completed" },
+        { id: "msg_0", type: "message", role: "user", content: [{ type: "input_text", text: "continue" }] },
+      ],
+    });
+
+    assert.equal(upstreamBody.model, "upstream-alpha");
+    assert.equal(upstreamBody.store, false);
+    assert.deepEqual(upstreamBody.input, [
+      { type: "reasoning", summary: [{ type: "summary_text", text: "internal" }], status: "completed" },
+      { type: "function_call", call_id: "call_1", name: "lookup", arguments: "{\"city\":\"Shanghai\"}", status: "completed" },
+      { type: "message", role: "user", content: [{ type: "input_text", text: "continue" }] },
+    ]);
+  });
+});
+
 await runAsync("model bodyExpression rewrites passthrough upstream request body", async () => {
   let upstreamBody: any;
   await withHTTPServer(async (req, res) => {
@@ -3097,6 +3278,62 @@ models:
         messages: [{ role: "user", parts: [{ type: "text", text: "hello" }] }],
       });
       assert.equal(upstreamBody.model, "openai/gpt-5.6");
+    } finally {
+      rmSync(dirname(configPath), { recursive: true, force: true });
+    }
+  });
+});
+
+await runAsync("anthropic converted requests honor ignore_invalid_history false from config", async () => {
+  let upstreamBody: any;
+  await withHTTPServer(async (req, res) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+    req.on("end", () => {
+      upstreamBody = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        id: "msg_1",
+        type: "message",
+        role: "assistant",
+        model: upstreamBody.model,
+        content: [{ type: "text", text: "ok", citations: null }],
+        stop_reason: "end_turn",
+        stop_sequence: null,
+        usage: { input_tokens: 1, output_tokens: 1 },
+      }));
+    });
+  }, async (baseURL) => {
+    const configPath = writeTempConfig(`
+models:
+  - name: claude
+    provider: anthropic
+    base_url: ${baseURL}
+    api_key: test-key
+    model: claude-sonnet-4-6
+    ignore_invalid_history: false
+`);
+
+    try {
+      const config = loadConfig(configPath);
+      const match = resolveModelForRequest(config, "claude");
+      assert.ok(match);
+      await forwardRequest(match.model, {
+        model: "claude",
+        sourceFormat: "openai-responses",
+        stream: false,
+        messages: [
+          { role: "assistant", parts: [{ type: "thinking", thinking: "internal detail" }, { type: "text", text: "visible answer" }] },
+          { role: "user", parts: [{ type: "text", text: "go on" }] },
+        ],
+      } as any);
+
+      const content = upstreamBody.messages[0].content;
+      assert.equal(content[0].type, "thinking");
+      assert.equal(content[0].thinking, "internal detail");
+      assert.equal(content[0].signature, "");
+      assert.equal(content[1].type, "text");
+      assert.equal(content[1].text, "visible answer");
     } finally {
       rmSync(dirname(configPath), { recursive: true, force: true });
     }

@@ -17,6 +17,7 @@ export interface ModelConfig {
   headers?: Record<string, string>;
   body?: Record<string, unknown>;
   bodyExpression?: string;
+  ignore_invalid_history?: boolean;
 }
 
 export interface ServerConfig {
@@ -100,6 +101,17 @@ function normalizePositiveInteger(value: unknown, fieldName: string): number | u
   return normalized;
 }
 
+function normalizeBoolean(value: unknown, fieldName: string, defaultValue: boolean): boolean {
+  if (value === undefined || value === null || value === "") return defaultValue;
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "true") return true;
+    if (normalized === "false") return false;
+  }
+  throw new Error(`'${fieldName}' must be a boolean`);
+}
+
 function normalizeProxyUrl(value: unknown, fieldName: string): string | undefined {
   if (value === undefined || value === null || value === "") return undefined;
 
@@ -135,11 +147,13 @@ function normalizeModelConfig(model: ModelConfig, defaultTTFBTimeout?: number): 
       : String(model.bodyExpression);
   const ttfb_timeout = normalizeTimeout(model.ttfb_timeout, `models.${model.name || "<unknown>"}.ttfb_timeout`) ?? defaultTTFBTimeout;
   const image = model.image === undefined ? true : !!model.image;
+  const ignore_invalid_history = normalizeBoolean(model.ignore_invalid_history, `models.${model.name || "<unknown>"}.ignore_invalid_history`, true);
   const proxy = normalizeProxyUrl(model.proxy, `models.${model.name || "<unknown>"}.proxy`);
 
   return {
     ...model,
     image,
+    ignore_invalid_history,
     proxy,
     ...(ttfb_timeout !== undefined ? { ttfb_timeout } : {}),
     ...(headers ? { headers } : {}),

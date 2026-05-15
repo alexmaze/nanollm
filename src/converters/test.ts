@@ -995,7 +995,7 @@ var res: OpenAIResponsesRequest = {
 			"text": "看下whoami运行结果"
 		}]
 	}, {
-		"id": "reasoning_0",
+		"id": "rs_0",
 		"type": "reasoning",
 		"summary": [],
 		"content": [],
