@@ -1,0 +1,230 @@
+name: Release binaries
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - package.json
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  version:
+    name: Check package version
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.version.outputs.changed }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compare package version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          current_version="$(node -p "require('./package.json').version")"
+          previous_version=""
+
+          if [ "${{ github.event_name }}" = "push" ] && git cat-file -e "${{ github.event.before }}:package.json" 2>/dev/null; then
+            previous_version="$(git show "${{ github.event.before }}:package.json" | node -e "let input=''; process.stdin.on('data', c => input += c); process.stdin.on('end', () => console.log(JSON.parse(input).version || ''));")"
+          fi
+
+          changed=false
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ "$current_version" != "$previous_version" ]; then
+            changed=true
+          fi
+
+          echo "version=$current_version" >> "$GITHUB_OUTPUT"
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+          echo "current_version=$current_version previous_version=${previous_version:-<none>} changed=$changed"
+
+  build:
+    name: Build ${{ matrix.asset_name }}
+    needs: version
+    if: needs.version.outputs.changed == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            asset_name: nanollm-windows-x64.exe
+            executable_name: nanollm.exe
+            postject_extra_args: ""
+          - runner: ubuntu-24.04
+            asset_name: nanollm-linux-x64
+            executable_name: nanollm
+            postject_extra_args: ""
+          - runner: macos-14
+            asset_name: nanollm-darwin-arm64
+            executable_name: nanollm
+            postject_extra_args: "--macho-segment-name NODE_SEA"
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.9.0
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build JavaScript
+        run: npm run build
+
+      - name: Bundle for SEA
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist-sea
+          npx --yes esbuild@0.27.1 dist/cli.js \
+            --bundle \
+            --platform=node \
+            --format=esm \
+            --target=node24 \
+            --packages=bundle \
+            --external:node:sqlite \
+            --outfile=dist-sea/nanollm.bundle.mjs
+
+      - name: Write SEA wrapper and config
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > dist-sea/sea-main.cjs <<'EOF'
+          const { getAsset } = require("node:sea");
+          const { createRequire } = require("node:module");
+
+          globalThis.require = createRequire(process.execPath);
+          const source = getAsset("main.mjs", "utf8");
+          const encoded = Buffer.from(source, "utf8").toString("base64");
+
+          import(`data:text/javascript;base64,${encoded}`).catch((error) => {
+            console.error(error);
+            process.exitCode = 1;
+          });
+          EOF
+
+          cat > dist-sea/sea-config.json <<'EOF'
+          {
+            "main": "dist-sea/sea-main.cjs",
+            "output": "dist-sea/nanollm.blob",
+            "assets": {
+              "main.mjs": "dist-sea/nanollm.bundle.mjs"
+            },
+            "disableExperimentalSEAWarning": true,
+            "useCodeCache": false,
+            "useSnapshot": false
+          }
+          EOF
+
+      - name: Build SEA blob
+        run: node --experimental-sea-config dist-sea/sea-config.json
+
+      - name: Prepare executable
+        shell: bash
+        run: |
+          set -euo pipefail
+          node -e "require('node:fs').copyFileSync(process.execPath, 'dist-sea/${{ matrix.executable_name }}')"
+          chmod +x "dist-sea/${{ matrix.executable_name }}" || true
+
+      - name: Remove macOS signature
+        if: runner.os == 'macOS'
+        run: codesign --remove-signature "dist-sea/${{ matrix.executable_name }}"
+
+      - name: Inject SEA blob
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx --yes postject "dist-sea/${{ matrix.executable_name }}" NODE_SEA_BLOB dist-sea/nanollm.blob \
+            --sentinel-fuse NODE_SEA_FUSE_fce680ab2cc467b6e072b8b5df1996b2 \
+            ${{ matrix.postject_extra_args }}
+
+      - name: Smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat > dist-sea/smoke.config.yaml <<'EOF'
+          server:
+            port: 31991
+          models: []
+          EOF
+
+          "dist-sea/${{ matrix.executable_name }}" --config dist-sea/smoke.config.yaml > dist-sea/smoke.log 2>&1 &
+          pid="$!"
+
+          cleanup() {
+            kill "$pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          for _ in $(seq 1 40); do
+            if node -e "fetch('http://127.0.0.1:31991/health').then(r => r.json()).then(j => { if (!j.ok) process.exit(1) }).catch(() => process.exit(1))"; then
+              exit 0
+            fi
+            sleep 0.25
+          done
+
+          cat dist-sea/smoke.log
+          exit 1
+
+      - name: Rename artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          cp "dist-sea/${{ matrix.executable_name }}" "release/${{ matrix.asset_name }}"
+          chmod +x "release/${{ matrix.asset_name }}" || true
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: release/${{ matrix.asset_name }}
+          if-no-files-found: error
+
+  release:
+    name: Publish release
+    needs:
+      - version
+      - build
+    if: needs.version.outputs.changed == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish GitHub release
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tag="$RELEASE_VERSION"
+          notes="Binary release for nanollm $RELEASE_VERSION."
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" release-assets/* --clobber
+          else
+            gh release create "$tag" release-assets/* \
+              --title "$RELEASE_VERSION" \
+              --notes "$notes" \
+              --target "${{ github.sha }}"
+          fi
