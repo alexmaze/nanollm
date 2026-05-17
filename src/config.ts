@@ -23,6 +23,9 @@ export interface ModelConfig {
 export interface ServerConfig {
   port: number;
   ttfb_timeout?: number;
+  auth?: {
+    token?: string;
+  };
   models: ModelConfig[];
   fallback: Record<string, string[]>;
   record: {
@@ -31,7 +34,7 @@ export interface ServerConfig {
 }
 
 export interface ParsedConfigDocument {
-  server?: { port?: number; ttfb_timeout?: number };
+  server?: { port?: number; ttfb_timeout?: number; auth?: { token?: string } };
   record?: { max_size?: number };
   models?: ModelConfig[];
   fallback?: Record<string, string[]>;
@@ -41,6 +44,7 @@ export interface MaterializeConfigOptions {
   port?: number;
   ttfb_timeout?: number;
   recordMaxSize?: number;
+  authToken?: string;
 }
 
 export interface ResolvedModelMatch {
@@ -99,6 +103,12 @@ function normalizePositiveInteger(value: unknown, fieldName: string): number | u
     throw new Error(`'${fieldName}' must be a positive integer`);
   }
   return normalized;
+}
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  if (value === undefined || value === null) return undefined;
+  const normalized = String(value).trim();
+  return normalized ? normalized : undefined;
 }
 
 function normalizeBoolean(value: unknown, fieldName: string, defaultValue: boolean): boolean {
@@ -190,6 +200,7 @@ export function parseSourceConfigDocument(rawText: string): ParsedConfigDocument
 export function materializeConfig(document: ParsedConfigDocument, options?: MaterializeConfigOptions): ServerConfig {
   const defaultTTFBTimeout = options?.ttfb_timeout ?? normalizeTimeout(document.server?.ttfb_timeout, "server.ttfb_timeout") ?? DEFAULT_TTFB_TIMEOUT;
   const recordMaxSize = options?.recordMaxSize ?? (normalizePositiveInteger(document.record?.max_size, "record.max_size") ?? DEFAULT_RECORD_MAX_SIZE);
+  const authToken = normalizeOptionalString(options?.authToken ?? document.server?.auth?.token);
   const models = (document.models ?? []).map((model) => normalizeModelConfig(model, defaultTTFBTimeout));
   const fallback = document.fallback ?? {};
 
@@ -207,6 +218,7 @@ export function materializeConfig(document: ParsedConfigDocument, options?: Mate
   return {
     port: Number(process.env.PORT) || options?.port || (document.server?.port ?? 3000),
     ...(defaultTTFBTimeout !== undefined ? { ttfb_timeout: defaultTTFBTimeout } : {}),
+    ...(authToken ? { auth: { token: authToken } } : {}),
     models,
     fallback,
     record: {

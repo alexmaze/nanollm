@@ -44,12 +44,14 @@ function sameValue(left: unknown, right: unknown): boolean {
 function getRestartFields(intended: ServerConfig, effective: ServerConfig): string[] {
   const fields: string[] = [];
   if (!sameValue(intended.port, effective.port)) fields.push("server.port");
+  if (!sameValue(intended.auth?.token, effective.auth?.token)) fields.push("server.auth.token");
   return fields;
 }
 
 function materializeHotConfig(document: ParsedConfigDocument, current: ServerConfig): ServerConfig {
   return materializeConfig(document, {
     port: current.port,
+    authToken: current.auth?.token ?? "",
   });
 }
 

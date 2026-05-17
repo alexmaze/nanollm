@@ -4,10 +4,12 @@ import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { Hono } from "hono";
+import type { Context } from "hono";
 import { serve } from "@hono/node-server";
 import { cors } from "hono/cors";
 import { randomUUID } from "node:crypto";
 import type { ModelConfig, ServerConfig } from "./src/config.js";
+import { buildAuthCookieValue, extractBearerToken, isAuthorizedToken, readAuthCookie } from "./src/auth.js";
 import { getPublicModelNames, parseConfigText, parseSourceConfigDocument, resolveFallbackModels, resolveModel, resolveModelForRequest } from "./src/config.js";
 import { ConfigManager } from "./src/config-manager.js";
 import { getUpstreamURL } from "./src/proxy.js";
@@ -141,6 +143,7 @@ configManager.onUpdate(({ snapshot }, source) => {
   }
 });
 const app = new Hono();
+const AUTH_COOKIE_NAME = "nanollm_auth";
 const apiCors = cors({
   origin: "*",
   allowMethods: ["GET", "POST", "OPTIONS"],
@@ -179,6 +182,34 @@ app.use("*", async (c, next) => {
     return next();
   }
   return apiCors(c, next);
+});
+
+app.use("*", async (c, next) => {
+  if (c.req.method === "OPTIONS") {
+    return next();
+  }
+  if (c.req.path === "/health") {
+    return next();
+  }
+
+  const authToken = configManager.getActiveSnapshot().effectiveConfig.auth?.token;
+  if (!authToken) {
+    return next();
+  }
+
+  const headerToken = extractBearerToken(c.req.header("authorization"));
+  const queryToken = c.req.query("token") || undefined;
+  const cookieToken = readAuthCookie(c.req.header("cookie"), AUTH_COOKIE_NAME);
+  if (
+    isAuthorizedToken(authToken, headerToken) ||
+    isAuthorizedToken(authToken, queryToken) ||
+    isAuthorizedToken(authToken, cookieToken)
+  ) {
+    persistAuthCookie(c, authToken);
+    return next();
+  }
+
+  return unauthorizedResponse(c);
 });
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -222,6 +253,18 @@ function writeConfigAtomic(path: string, text: string) {
   const tempPath = `${path}.${randomUUID()}.tmp`;
   writeFileSync(tempPath, text, "utf-8");
   renameSync(tempPath, path);
+}
+
+function unauthorizedResponse(c: Context) {
+  c.header("WWW-Authenticate", "Bearer");
+  return c.json({ error: "Unauthorized" }, 401);
+}
+
+function persistAuthCookie(c: Context, token: string) {
+  c.header(
+    "Set-Cookie",
+    `${AUTH_COOKIE_NAME}=${buildAuthCookieValue(token)}; Path=/; HttpOnly; SameSite=Lax`,
+  );
 }
 
 function toInputString(value: unknown): string {
@@ -967,7 +1010,11 @@ app.get("/record/:requestId", (c) => {
 });
 
 app.get("/admin", (c) => c.html(renderAdminConfigPage(buildConfigAdminPayload())));
-app.get("/admin/config", (c) => c.redirect("/admin", 302));
+app.get("/admin/config", (c) => {
+  const token = c.req.query("token");
+  const target = token ? `/admin?token=${encodeURIComponent(token)}` : "/admin";
+  return c.redirect(target, 302);
+});
 app.get("/admin/config/data", (c) => c.json(buildConfigAdminPayload()));
 app.post("/admin/config/apply", async (c) => {
   let body: { config?: unknown; baseVersion?: unknown };

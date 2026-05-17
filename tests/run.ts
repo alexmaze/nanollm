@@ -4,6 +4,7 @@ import http from "node:http";
 import os from "node:os";
 import { dirname, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { Hono } from "hono";
 
 import {
   anthropicMessageRequestToChatParams,
@@ -20,6 +21,7 @@ import {
   responsesResponseToAnthropicMessage,
   responsesResponseToChatCompletion,
 } from "../src/converters/index.js";
+import { buildAuthCookieValue, extractBearerToken, isAuthorizedToken, readAuthCookie } from "../src/auth.js";
 import { getPublicModelNames, loadConfig, resolveFallbackModels, resolveModelForRequest } from "../src/config.js";
 import { renderAdminConfigPage } from "../src/admin-config-page.js";
 import { ConfigManager } from "../src/config-manager.js";
@@ -122,6 +124,37 @@ function writeTempConfig(yaml: string): string {
   const file = join(dir, "config.yaml");
   writeFileSync(file, yaml);
   return file;
+}
+
+function buildAuthTestApp(token?: string) {
+  const app = new Hono();
+  const authCookieName = "nanollm_auth";
+  app.use("*", async (c, next) => {
+    if (c.req.method === "OPTIONS") {
+      return next();
+    }
+    if (c.req.path === "/health") {
+      return next();
+    }
+    if (!token) {
+      return next();
+    }
+    const headerToken = extractBearerToken(c.req.header("authorization"));
+    const queryToken = c.req.query("token") || undefined;
+    const cookieToken = readAuthCookie(c.req.header("cookie"), authCookieName);
+    if (isAuthorizedToken(token, headerToken) || isAuthorizedToken(token, queryToken) || isAuthorizedToken(token, cookieToken)) {
+      c.header("Set-Cookie", `${authCookieName}=${buildAuthCookieValue(token)}; Path=/; HttpOnly; SameSite=Lax`);
+      return next();
+    }
+    c.header("WWW-Authenticate", "Bearer");
+    return c.json({ error: "Unauthorized" }, 401);
+  });
+  app.get("/health", (c) => c.json({ ok: true }));
+  app.get("/status", (c) => c.text("status-page"));
+  app.get("/record", (c) => c.text("record-page"));
+  app.get("/admin", (c) => c.text("admin-page"));
+  app.get("/v1/models", (c) => c.json({ object: "list", data: [] }));
+  return app;
 }
 
 async function waitForCondition(check: () => boolean, timeoutMs = 3000, intervalMs = 50): Promise<void> {
@@ -2937,6 +2970,8 @@ run("config manager hot-reloads models, fallback, ttfb_timeout and record max_si
 server:
   port: 3000
   ttfb_timeout: 1500
+  auth:
+    token: old-token
 
 record:
   max_size: 10
@@ -2959,6 +2994,8 @@ fallback:
 server:
   port: 4000
   ttfb_timeout: 2600
+  auth:
+    token: new-token
 
 record:
   max_size: 25
@@ -2976,13 +3013,67 @@ fallback:
 `, "ui");
 
     assert.deepEqual(result.appliedFields, ["models", "fallback", "server.ttfb_timeout", "record.max_size"]);
-    assert.deepEqual(result.requiresRestartFields, ["server.port"]);
+    assert.deepEqual(result.requiresRestartFields, ["server.port", "server.auth.token"]);
     assert.equal(result.snapshot.effectiveConfig.port, 3000);
+    assert.equal(result.snapshot.effectiveConfig.auth?.token, "old-token");
     assert.equal(result.snapshot.effectiveConfig.ttfb_timeout, 2600);
     assert.equal(result.snapshot.effectiveConfig.record.max_size, 25);
     assert.equal(result.snapshot.effectiveConfig.models[0].name, "beta");
     assert.equal(result.snapshot.effectiveConfig.models[0].ttfb_timeout, 2600);
     assert.deepEqual(result.snapshot.effectiveConfig.fallback, { primary: ["beta"] });
+  } finally {
+    manager.dispose();
+    rmSync(dirname(configPath), { recursive: true, force: true });
+  }
+});
+
+run("config manager does not hot-apply auth token when enabling it from empty", () => {
+  const configPath = writeTempConfig(`
+server:
+  port: 3000
+  ttfb_timeout: 1500
+
+record:
+  max_size: 10
+
+models:
+  - name: alpha
+    provider: openai-chat
+    base_url: https://example.com/v1
+    api_key: test-key
+    model: upstream-alpha
+
+fallback:
+  primary:
+    - alpha
+`);
+
+  const manager = new ConfigManager(configPath);
+  try {
+    const result = manager.applyText(`
+server:
+  port: 3000
+  ttfb_timeout: 1500
+  auth:
+    token: new-token
+
+record:
+  max_size: 10
+
+models:
+  - name: alpha
+    provider: openai-chat
+    base_url: https://example.com/v1
+    api_key: test-key
+    model: upstream-alpha
+
+fallback:
+  primary:
+    - alpha
+`, "ui");
+
+    assert.deepEqual(result.requiresRestartFields, ["server.auth.token"]);
+    assert.equal(result.snapshot.effectiveConfig.auth?.token, undefined);
   } finally {
     manager.dispose();
     rmSync(dirname(configPath), { recursive: true, force: true });
@@ -3030,6 +3121,8 @@ runAsync("config manager watcher applies external file changes", async () => {
   const configPath = writeTempConfig(`
 server:
   port: 3000
+  auth:
+    token: old-token
 
 record:
   max_size: 10
@@ -3048,6 +3141,8 @@ models:
 server:
   port: 3010
   ttfb_timeout: 2200
+  auth:
+    token: new-token
 
 record:
   max_size: 6
@@ -3064,10 +3159,11 @@ models:
 
     const snapshot = manager.getActiveSnapshot();
     assert.equal(snapshot.effectiveConfig.port, 3000);
+    assert.equal(snapshot.effectiveConfig.auth?.token, "old-token");
     assert.equal(snapshot.effectiveConfig.ttfb_timeout, 2200);
     assert.equal(snapshot.effectiveConfig.record.max_size, 6);
     assert.equal(snapshot.effectiveConfig.models[0].name, "beta");
-    assert.deepEqual(snapshot.requiresRestartFields, ["server.port"]);
+    assert.deepEqual(snapshot.requiresRestartFields, ["server.port", "server.auth.token"]);
   } finally {
     manager.dispose();
     rmSync(dirname(configPath), { recursive: true, force: true });
@@ -3656,6 +3752,9 @@ run("status page renders fallback group priority panel without top hint text", (
   assert.match(html, /"fallbackGroups":\[\{"name":"group-a","members":\["beta","alpha"\]\}\]/);
   assert.match(html, /renderFallbackGroups/);
   assert.match(html, /class="layout"/);
+  assert.match(html, /fetch\("\/status\/data"/);
+  assert.doesNotMatch(html, /AUTH_TOKEN_KEY = "nanollmAuthToken"/);
+  assert.doesNotMatch(html, /sessionStorage\.setItem\(/);
   assert.doesNotMatch(html, /只展示真实模型/);
   assert.doesNotMatch(html, /id="range-meta"/);
 });
@@ -3670,6 +3769,9 @@ run("record page renders query UI and JSON tree viewer", () => {
   });
   assert.match(html, /Request Record/);
   assert.match(html, /fetch\("\/record\/summary"/);
+  assert.match(html, /fetch\("\/record\/" \+ encodeURIComponent\(requestId\)/);
+  assert.doesNotMatch(html, /AUTH_TOKEN_KEY = "nanollmAuthToken"/);
+  assert.doesNotMatch(html, /sessionStorage\.setItem\(/);
   assert.match(html, /createValueNode/);
   assert.match(html, /createCollapsibleSection/);
   assert.match(html, /createStringNode/);
@@ -3680,7 +3782,6 @@ run("record page renders query UI and JSON tree viewer", () => {
   assert.match(html, /renderStreamValue\(streamState\.reconstructed, \{ expandedDepth: 1 \}\)/);
   assert.match(html, /box-actions/);
   assert.match(html, /setInterval\(\(\) =>/);
-  assert.match(html, /fetch\("\/record\/summary"/);
   assert.match(html, /normalizeRequestIdInput/);
   assert.match(html, /id="record-panel"/);
   assert.match(html, /class="panel recording"/);
@@ -3737,6 +3838,22 @@ run("record page renders query UI and JSON tree viewer", () => {
   assert.doesNotMatch(html, /停止采样/);
 });
 
+run("admin page relies on server cookie auth instead of client-side token storage", () => {
+  const html = renderAdminConfigPage({
+    version: 1,
+    configPath: "C:/tmp/config.yaml",
+    effectiveConfig: { port: 3000, models: [], fallback: {}, record: { max_size: 10 } },
+    form: { server: { port: "3000", ttfb_timeout: "5000" }, record: { max_size: "10" }, models: [], fallbackGroups: [] },
+  } as any);
+  assert.match(html, /fetch\("\/admin\/config\/data"/);
+  assert.match(html, /fetch\("\/admin\/config\/apply"/);
+  assert.match(html, /href="\/status"/);
+  assert.match(html, /href="\/record"/);
+  assert.doesNotMatch(html, /AUTH_TOKEN_KEY = "nanollmAuthToken"/);
+  assert.doesNotMatch(html, /sessionStorage\.setItem\(/);
+  assert.doesNotMatch(html, /buildAuthedPath/);
+});
+
 run("record page stream parser keeps data-like text inside JSON payloads", () => {
   const html = renderRecordPage({
     enabled: true,
@@ -3757,6 +3874,85 @@ run("http log level only keeps /v1 lifecycle logs at info", () => {
   assert.equal(getHTTPLogLevel("/v1/models"), "info");
   assert.equal(getHTTPLogLevel("/record"), "debug");
   assert.equal(getHTTPLogLevel("/status"), "debug");
+});
+
+run("auth helpers parse bearer token and compare securely", () => {
+  assert.equal(extractBearerToken("Bearer secret-token"), "secret-token");
+  assert.equal(extractBearerToken("bearer secret-token"), "secret-token");
+  assert.equal(extractBearerToken("Basic abc"), undefined);
+  assert.equal(extractBearerToken("Bearer   "), undefined);
+  assert.equal(buildAuthCookieValue("secret-token"), "secret-token");
+  assert.equal(readAuthCookie("nanollm_auth=secret-token", "nanollm_auth"), "secret-token");
+  assert.equal(readAuthCookie("foo=bar; nanollm_auth=secret-token", "nanollm_auth"), "secret-token");
+  assert.equal(readAuthCookie(undefined, "nanollm_auth"), undefined);
+  assert.equal(isAuthorizedToken(undefined, undefined), true);
+  assert.equal(isAuthorizedToken("secret-token", "secret-token"), true);
+  assert.equal(isAuthorizedToken("secret-token", "wrong-token"), false);
+  assert.equal(isAuthorizedToken("secret-token", "secret-token-2"), false);
+});
+
+run("config materialization trims empty auth token and keeps non-empty token", () => {
+  const disabled = loadConfig(writeTempConfig(`
+server:
+  port: 3000
+  auth:
+    token: ""
+models: []
+fallback: {}
+`));
+  assert.equal(disabled.auth?.token, undefined);
+
+  const enabled = loadConfig(writeTempConfig(`
+server:
+  port: 3000
+  auth:
+    token: "  top-secret  "
+models: []
+fallback: {}
+`));
+  assert.equal(enabled.auth?.token, "top-secret");
+});
+
+await runAsync("auth middleware leaves routes open when token is not configured", async () => {
+  const app = buildAuthTestApp();
+  const response = await app.request("http://localhost/v1/models");
+  assert.equal(response.status, 200);
+});
+
+await runAsync("auth middleware rejects unauthenticated requests when token is configured", async () => {
+  const app = buildAuthTestApp("top-secret");
+  for (const path of ["/v1/models", "/admin", "/status", "/record"]) {
+    const response = await app.request("http://localhost" + path);
+    assert.equal(response.status, 401);
+    assert.equal(response.headers.get("www-authenticate"), "Bearer");
+    assert.deepEqual(await response.json(), { error: "Unauthorized" });
+  }
+
+  const healthResponse = await app.request("http://localhost/health");
+  assert.equal(healthResponse.status, 200);
+  assert.deepEqual(await healthResponse.json(), { ok: true });
+});
+
+await runAsync("auth middleware accepts bearer header, query token, and options preflight", async () => {
+  const app = buildAuthTestApp("top-secret");
+
+  const headerResponse = await app.request("http://localhost/v1/models", {
+    headers: { Authorization: "Bearer top-secret" },
+  });
+  assert.equal(headerResponse.status, 200);
+  assert.match(headerResponse.headers.get("set-cookie") ?? "", /nanollm_auth=top-secret/);
+
+  const queryResponse = await app.request("http://localhost/admin?token=top-secret");
+  assert.equal(queryResponse.status, 200);
+  assert.match(queryResponse.headers.get("set-cookie") ?? "", /nanollm_auth=top-secret/);
+
+  const cookieResponse = await app.request("http://localhost/status", {
+    headers: { Cookie: "nanollm_auth=top-secret" },
+  });
+  assert.equal(cookieResponse.status, 200);
+
+  const optionsResponse = await app.request("http://localhost/v1/models", { method: "OPTIONS" });
+  assert.notEqual(optionsResponse.status, 401);
 });
 
 run("debug logs are hidden by default and can be enabled with LOG_LEVEL=debug", () => {

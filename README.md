@@ -6,7 +6,7 @@
 - 1 可以配置`chat/completions`(下面称chat), `responses`和`messages`三种接口（暂不支持google接口）的模型供应商，并且同时对外暴露这三种接口，带`/v1`前缀。
 - 2 可以配置修改请求中的`headers`和`body`，传自定义数据，其中`body`支持深度合并。
 - 3 可以配置兜底方案，设置兜底分组，如果调用的模型下游接口失败，并且在某个分组中，则会尝试分组其他模型。
-- 4 支持配置文件热更新和本地管理页：`models`、`fallback`、`server.ttfb_timeout`、`record.max_size` 保存后立即生效，`server.port` 写回后需重启进程。
+- 4 支持配置文件热更新和本地管理页：`models`、`fallback`、`server.ttfb_timeout`、`record.max_size` 保存后立即生效，`server.port` 和 `server.auth.token` 写回后需重启进程。
 
 ## Configure
 
@@ -87,6 +87,40 @@ claude-sonnet-4-6
 gpt-5.4
 ```
 这样5个模型，其中`gpt-5.4`是兜底分组名，当使用这个模型的时候，会在下属列表的模型中寻找可用的模型，尝试顺序为按`max(0, 最近5min失败次数-1)`升序；如果分数相同，则保持配置里的原始顺序。
+
+### Bearer Key 认证
+
+如果你希望给整个 nanollm 网关加一层访问认证，可以配置：
+
+```yaml
+server:
+  auth:
+    token: ${NANOLLM_AUTH_TOKEN}
+```
+
+- `server.auth.token` 为空或不配置时，认证关闭。
+- 运行中，修改 `server.auth.token` 会写回配置文件，但和 `server.port` 一样需要重启进程后才会真正生效。
+- 一旦配置，除了 `/health` 以外，其余入口都要求认证，包括 `/`、`/status`、`/record`、`/admin`、`/v1/models` 和 `/v1/*`。
+- 认证只保护访问 nanollm 本身，不会替代或覆盖 `models[*].api_key`，也不会转发到上游模型供应商。
+
+API 客户端使用标准 Bearer header：
+
+```bash
+curl http://localhost:3000/v1/models \
+  -H "Authorization: Bearer $NANOLLM_AUTH_TOKEN"
+```
+
+如果你用 OpenAI SDK 或兼容客户端，把这个 token 当成访问 nanollm 的 API key 即可。
+
+浏览器打开页面时，可以用一次性 URL token 入口：
+
+```text
+http://localhost:3000/admin?token=YOUR_TOKEN
+http://localhost:3000/status?token=YOUR_TOKEN
+http://localhost:3000/record?token=YOUR_TOKEN
+```
+
+首次用 `?token=` 或 Bearer header 认证成功后，nanollm 会写入同源认证 cookie。之后同一浏览器里直接访问 `/admin`、`/status`、`/record`，以及这些页面内部的 `fetch` 请求，都不需要再重复带 `?token=`。
 
 ### 动态请求体表达式
 
@@ -259,7 +293,7 @@ npx nanollm
 - 如果只是想放弃当前改动，可以点击“撤销未保存修改”；如果配置文件已被外部改动，可以点击“从服务端刷新”重新加载最新内容。
 - 点击保存后会先把表单数据转换成 YAML、校验配置，再原子写回配置文件。
 - `models`、`fallback`、`server.ttfb_timeout`、`record.max_size` 会立即热更新到新请求。
-- `server.port` 会写回文件，但需要重启进程后才会真正生效。
+- `server.port` 和 `server.auth.token` 会写回文件，但需要重启进程后才会真正生效。
 - 已有模型上未在表单中展开的高级字段会在保存时自动保留。
 - 如果你在外部手动修改 `config.yaml`，服务也会自动检测并加载新配置；若新内容非法，则继续保留上一份有效配置并在管理页显示错误。
 
