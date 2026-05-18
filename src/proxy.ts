@@ -1,6 +1,6 @@
 // @ts-nocheck
 import type { ModelConfig } from "./config.js";
-import type { StreamFormat } from "./converters/streams.js";
+import { SSEParser, type StreamFormat } from "./converters/streams.js";
 import type { NormalizedRequest, NormalizedResponse, NormalizedUsage } from "./converters/shared.js";
 import {
   denormalizeToOpenAIChatRequest,
@@ -279,7 +279,134 @@ async function upstreamFetch(
     throw err;
   }
 
+  const contentType = res.headers.get("content-type") ?? "";
+  if (contentType.includes("text/html")) {
+    const text = await res.text();
+    setRecordedAttemptResponseBody({ index: options?.attemptIndex ?? 0, body: text });
+    setRecordedAttemptError({
+      index: options?.attemptIndex ?? 0,
+      message: "Upstream returned HTML response (possible error page)",
+      status: 200,
+      upstream: text,
+    });
+    const err = new Error("Upstream returned HTML response (possible error page)") as Error & { status: number; upstream: string };
+    err.status = 200;
+    err.upstream = text;
+    throw err;
+  }
+  if (stream && !contentType.includes("text/event-stream")) {
+    const text = await res.text();
+    setRecordedAttemptResponseBody({ index: options?.attemptIndex ?? 0, body: text });
+    setRecordedAttemptError({
+      index: options?.attemptIndex ?? 0,
+      message: `Upstream returned non-SSE Content-Type for stream request: ${contentType}`,
+      status: 200,
+      upstream: text,
+    });
+    const err = new Error(`Upstream returned non-SSE Content-Type for stream request: ${contentType}`) as Error & { status: number; upstream: string };
+    err.status = 200;
+    err.upstream = text;
+    throw err;
+  }
+
   return { response: res, timing };
+}
+
+// ─── Stream content validation ──────────────────────────────────────────────
+
+const MAX_VALIDATION_BUFFER_BYTES = 64 * 1024;
+
+function reconstructStream(
+  bufferedChunks: Uint8Array[],
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): ReadableStream<Uint8Array> {
+  let index = 0;
+  return new ReadableStream({
+    async pull(controller) {
+      if (index < bufferedChunks.length) {
+        controller.enqueue(bufferedChunks[index++]);
+        return;
+      }
+      try {
+        const { done, value } = await reader.read();
+        if (done) {
+          controller.close();
+        } else {
+          controller.enqueue(value);
+        }
+      } catch (error) {
+        controller.error(error);
+      }
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
+}
+
+async function validateStreamContent(
+  body: ReadableStream<Uint8Array>,
+  options: { attemptIndex: number },
+): Promise<ReadableStream<Uint8Array>> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  const sseParser = new SSEParser();
+  const bufferedChunks: Uint8Array[] = [];
+  let totalBytes = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+
+      if (done) {
+        const flushed = sseParser.flush();
+        if (flushed.length > 0) {
+          return reconstructStream(bufferedChunks, reader);
+        }
+        const bufferedText = bufferedChunks.map(c => decoder.decode(c, { stream: true })).join("") + decoder.decode();
+        setRecordedAttemptResponseBody({ index: options.attemptIndex, body: bufferedText });
+        setRecordedAttemptError({
+          index: options.attemptIndex,
+          message: "Upstream SSE stream ended with no real content (ping-only or empty)",
+          status: 200,
+          upstream: bufferedText,
+        });
+        const err = new Error("Upstream SSE stream ended with no real content (ping-only or empty)") as Error & { status: number; upstream: string };
+        err.status = 200;
+        err.upstream = bufferedText;
+        throw err;
+      }
+
+      bufferedChunks.push(value);
+      totalBytes += value.byteLength;
+
+      const text = decoder.decode(value, { stream: true });
+      const events = sseParser.push(text);
+
+      if (events.length > 0) {
+        return reconstructStream(bufferedChunks, reader);
+      }
+
+      if (totalBytes >= MAX_VALIDATION_BUFFER_BYTES) {
+        const bufferedText = bufferedChunks.map(c => new TextDecoder().decode(c, { stream: true })).join("") + new TextDecoder().decode();
+        setRecordedAttemptResponseBody({ index: options.attemptIndex, body: bufferedText });
+        setRecordedAttemptError({
+          index: options.attemptIndex,
+          message: `Upstream SSE stream exceeded ${MAX_VALIDATION_BUFFER_BYTES} bytes with no real content`,
+          status: 200,
+          upstream: bufferedText,
+        });
+        const err = new Error(`Upstream SSE stream exceeded ${MAX_VALIDATION_BUFFER_BYTES} bytes with no real content`) as Error & { status: number; upstream: string };
+        err.status = 200;
+        err.upstream = bufferedText;
+        reader.cancel().catch(() => {});
+        throw err;
+      }
+    }
+  } catch (error) {
+    if (error instanceof Error && "upstream" in error) throw error;
+    throw error;
+  }
 }
 
 // ─── Passthrough (same format, no conversion) ───────────────────────────────
@@ -306,7 +433,8 @@ export async function passthroughStreamRequest(
   const body = preparePassthroughBody(config, rawBody, true);
   const { response, timing } = await upstreamFetch(config, JSON.stringify(body), true, options);
   if (!response.body) throw new Error("Upstream returned no streaming body");
-  return { body: response.body, headers: response.headers, timing };
+  const validatedBody = await validateStreamContent(response.body, { attemptIndex: options?.attemptIndex ?? 0 });
+  return { body: validatedBody, headers: response.headers, timing };
 }
 
 // ─── Forward with conversion (different format) ────────────────────────────
@@ -341,5 +469,6 @@ export async function forwardStreamRequest(
   const body = applyModelBodyTransforms(config, applyOpenAIDefaults(config.provider, denormalizeRequest(config, normalized)));
   const { response, timing } = await upstreamFetch(config, JSON.stringify(body), true, options);
   if (!response.body) throw new Error("Upstream returned no streaming body");
-  return { body: response.body, upstreamFormat: config.provider, timing };
+  const validatedBody = await validateStreamContent(response.body, { attemptIndex: options?.attemptIndex ?? 0 });
+  return { body: validatedBody, upstreamFormat: config.provider, timing };
 }
