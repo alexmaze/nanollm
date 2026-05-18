@@ -14,6 +14,7 @@
     "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.dist.json",
     "prepack": "npm run build",
     "start": "tsx server.ts",
+    "start:railway": "bash scripts/start-railway.sh",
     "dev": "tsx --watch server.ts",
     "typecheck": "tsc --noEmit",
     "test": "tsc -p tsconfig.build.json && node .test-dist/tests/run.js",
