@@ -372,7 +372,7 @@ const STYLE = /* css */ String.raw`
 
 const SCRIPT = /* js */ String.raw`
       const INITIAL_PAYLOAD = __INITIAL_PAYLOAD__;
-      const PROVIDERS = ["openai-chat", "openai-responses", "anthropic"];
+      const PROVIDERS = ["openai-chat", "openai-responses", "anthropic", "openai-image"];
       let saving = false;
       let dirty = false;
       let localIdCounter = 0;

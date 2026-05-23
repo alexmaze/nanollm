@@ -7,7 +7,7 @@ import { isResponsesCustomToolName, } from "../request-context.js";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-export type StreamFormat = "openai-chat" | "openai-responses" | "anthropic";
+export type StreamFormat = "openai-chat" | "openai-responses" | "anthropic" | "openai-image";
 
 export type NormalizedStreamEvent =
   | { type: "start"; id: string; model: string; createdAt: number }

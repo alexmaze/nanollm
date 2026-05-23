@@ -27,7 +27,7 @@ import { renderAdminConfigPage } from "../src/admin-config-page.js";
 import { ConfigManager } from "../src/config-manager.js";
 import { FallbackFailureTracker, FALLBACK_FAILURE_WINDOW_MS, sortFallbackGroupMembers } from "../src/fallback.js";
 import { getHTTPLogLevel, shouldEmitLog } from "../src/http-log.js";
-import { forwardRequest, passthroughRequest, passthroughStreamRequest, resolveProxyUrl } from "../src/proxy.js";
+import { forwardRequest, passthroughRawRequest, passthroughRequest, passthroughStreamRequest, resolveProxyUrl } from "../src/proxy.js";
 import { renderRecordPage } from "../src/record-page.js";
 import { renderStatusPage } from "../src/status-page.js";
 import { handleServerStartupError } from "../src/startup-error.js";
@@ -3027,6 +3027,58 @@ fallback:
   }
 });
 
+run("config accepts openai-image provider", () => {
+  const configPath = writeTempConfig(`
+models:
+  - name: gpt-image-1
+    provider: openai-image
+    base_url: https://api.openai.com/v1
+    api_key: test-key
+    model: gpt-image-1
+`);
+
+  try {
+    const config = loadConfig(configPath);
+    assert.equal(config.models[0].provider, "openai-image");
+  } finally {
+    rmSync(dirname(configPath), { recursive: true, force: true });
+  }
+});
+
+run("openai-image provider uses fixed default ttfb_timeout instead of server default", () => {
+  const configPath = writeTempConfig(`
+server:
+  ttfb_timeout: 1500
+
+models:
+  - name: image-default
+    provider: openai-image
+    base_url: https://api.openai.com/v1
+    api_key: test-key
+    model: gpt-image-1
+  - name: image-override
+    provider: openai-image
+    base_url: https://api.openai.com/v1
+    api_key: test-key
+    model: gpt-image-1
+    ttfb_timeout: 120000
+  - name: chat-default
+    provider: openai-chat
+    base_url: https://api.openai.com/v1
+    api_key: test-key
+    model: gpt-4.1
+`);
+
+  try {
+    const config = loadConfig(configPath);
+    assert.equal(config.models[0].ttfb_timeout, 300000);
+    assert.equal(config.models[1].ttfb_timeout, 120000);
+    assert.equal(config.models[2].ttfb_timeout, 1500);
+  } finally {
+    rmSync(dirname(configPath), { recursive: true, force: true });
+  }
+});
+
 run("config manager does not hot-apply auth token when enabling it from empty", () => {
   const configPath = writeTempConfig(`
 server:
@@ -4023,6 +4075,62 @@ await runAsync("passthrough request records upstream request and response", asyn
   assert.equal(record?.attempts[0].request.headers?.Authorization, "[REDACTED]");
   assert.deepEqual(record?.attempts[0].response.body, { id: "resp_1", usage: { prompt_tokens: 3, completion_tokens: 2 } });
   assert.deepEqual(record?.clientResponse.body, { id: "resp_1", usage: { prompt_tokens: 3, completion_tokens: 2 } });
+  stopRecording();
+});
+
+await runAsync("openai-image raw passthrough records unchanged generation request", async () => {
+  startRecording();
+  const requestId = "22345678-1234-5678-9abc-def012345678";
+  let upstreamPath = "";
+  let upstreamBody = "";
+  let upstreamContentType = "";
+  await withHTTPServer(async (req, res) => {
+    upstreamPath = req.url ?? "";
+    upstreamContentType = req.headers["content-type"] ?? "";
+    req.setEncoding("utf8");
+    req.on("data", (chunk) => {
+      upstreamBody += chunk;
+    });
+    req.on("end", () => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ created: 1, data: [{ b64_json: "abc" }] }));
+    });
+  }, async (baseURL) => {
+    const rawBody = JSON.stringify({ model: "gpt-image-1", prompt: "draw a cat", size: "1024x1024" });
+    await runWithRequestId(requestId, async () => {
+      beginRecordedRequest({
+        requestId,
+        path: "/v1/images/generations",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.parse(rawBody),
+        stream: false,
+      });
+      const result = await passthroughRawRequest({
+        name: "gpt-image-1",
+        provider: "openai-image",
+        base_url: baseURL,
+        api_key: "test-key",
+        model: "gpt-image-1",
+      }, new TextEncoder().encode(rawBody), new Headers({ "Content-Type": "application/json" }), {
+        attemptIndex: 1,
+        modelName: "gpt-image-1",
+        imageOperation: "generations",
+        recordedRequestBody: JSON.parse(rawBody),
+      });
+      setRecordedClientResponseMeta({ requestId, status: 200, headers: result.headers });
+      setRecordedClientResponseBody({ requestId, body: result.body });
+    });
+  });
+
+  assert.equal(upstreamPath, "/images/generations");
+  assert.equal(upstreamContentType, "application/json");
+  assert.equal(upstreamBody, JSON.stringify({ model: "gpt-image-1", prompt: "draw a cat", size: "1024x1024" }));
+  const record = getRecordedRequest(requestId);
+  assert.ok(record);
+  assert.equal(record?.attempts[0].provider, "openai-image");
+  assert.deepEqual(record?.attempts[0].request.body, { model: "gpt-image-1", prompt: "draw a cat", size: "1024x1024" });
+  assert.deepEqual(record?.attempts[0].response.body, { created: 1, data: [{ b64_json: "abc" }] });
+  assert.deepEqual(record?.clientResponse.body, { created: 1, data: [{ b64_json: "abc" }] });
   stopRecording();
 });
 

@@ -13,7 +13,7 @@ import { buildAuthCookieValue, extractBearerToken, isAuthorizedToken, readAuthCo
 import { getPublicModelNames, parseConfigText, parseSourceConfigDocument, resolveFallbackModels, resolveModel, resolveModelForRequest } from "./src/config.js";
 import { ConfigManager } from "./src/config-manager.js";
 import { getUpstreamURL } from "./src/proxy.js";
-import { forwardRequest, forwardStreamRequest, passthroughRequest, passthroughStreamRequest } from "./src/proxy.js";
+import { forwardRequest, forwardStreamRequest, passthroughRawRequest, passthroughRequest, passthroughStreamRequest, type OpenAIImageOperation } from "./src/proxy.js";
 import { FallbackFailureTracker, sortFallbackGroupMembers } from "./src/fallback.js";
 import { SqliteStatusStore, StatusStore, type StatusStoreLike } from "./src/status.js";
 import { renderStatusPage } from "./src/status-page.js";
@@ -420,6 +420,8 @@ function getNormalizer(format: StreamFormat): Normalizer {
       return normalizeOpenAIResponsesRequest;
     case "anthropic":
       return normalizeAnthropicRequest;
+    case "openai-image":
+      throw new Error("openai-image does not support protocol conversion");
   }
 }
 
@@ -431,6 +433,8 @@ function getDenormalizer(format: StreamFormat): Denormalizer {
       return denormalizeToOpenAIResponsesResponse;
     case "anthropic":
       return denormalizeToAnthropicResponse;
+    case "openai-image":
+      throw new Error("openai-image does not support protocol conversion");
   }
 }
 
@@ -442,6 +446,38 @@ function extractModel(body: unknown): string | undefined {
 function isStreamRequest(body: unknown): boolean {
   const b = body as Record<string, unknown>;
   return b.stream === true;
+}
+
+async function readImageRequestBody(c: Context) {
+  const contentType = c.req.header("content-type") ?? "";
+  const request = c.req.raw.clone();
+  const bytes = new Uint8Array(await request.arrayBuffer());
+  if (contentType.toLowerCase().includes("multipart/form-data")) {
+    const formData = await c.req.raw.clone().formData();
+    const recorded: Record<string, unknown> = {};
+    for (const [key, value] of formData.entries()) {
+      const item = typeof File !== "undefined" && value instanceof File
+        ? { type: "file", name: value.name, mediaType: value.type, size: value.size }
+        : value;
+      const current = recorded[key];
+      if (current === undefined) {
+        recorded[key] = item;
+      } else if (Array.isArray(current)) {
+        current.push(item);
+      } else {
+        recorded[key] = [current, item];
+      }
+    }
+    return { bytes, recordedBody: recorded };
+  }
+
+  const text = new TextDecoder().decode(bytes);
+  if (contentType.toLowerCase().includes("application/json")) {
+    try {
+      return { bytes, recordedBody: JSON.parse(text) };
+    } catch {}
+  }
+  return { bytes, recordedBody: text };
 }
 
 function orange(message: string): string {
@@ -693,6 +729,136 @@ function createRoute(incomingFormat: StreamFormat) {
       const response = c.json(errorBody, status);
       setRecordedClientResponseMeta({ status: response.status, headers: response.headers });
       setRecordedClientResponseBody({ body: errorBody });
+      finalizeRecordedRequest({});
+      return response;
+    }
+
+    setRecordedRequestError({ message: "Request failed" });
+    const response = c.json({ error: "Request failed" }, 500);
+    setRecordedClientResponseMeta({ status: response.status, headers: response.headers });
+    setRecordedClientResponseBody({ body: { error: "Request failed" } });
+    finalizeRecordedRequest({});
+    return response;
+  };
+}
+
+function createImageRoute(imageOperation: OpenAIImageOperation) {
+  return async (c: Context) => {
+    const snapshot = configManager.getActiveSnapshot();
+    const config = snapshot.effectiveConfig;
+    const userAgent = c.req.header("user-agent");
+    const upstreamOptions = { userAgent };
+    const { bytes, recordedBody } = await readImageRequestBody(c);
+    const modelName = extractModel(recordedBody);
+    const requestId = getRequestId();
+    if (requestId) {
+      beginRecordedRequest({
+        requestId,
+        path: c.req.path,
+        headers: c.req.raw.headers,
+        body: recordedBody,
+        stream: false,
+      });
+    }
+
+    if (!modelName) {
+      const response = c.json({ error: "Missing 'model' in request body" }, 400);
+      setRecordedRequestError({ message: "Missing 'model' in request body" });
+      setRecordedClientResponseMeta({ status: response.status, headers: response.headers });
+      setRecordedClientResponseBody({ body: { error: "Missing 'model' in request body" } });
+      finalizeRecordedRequest({});
+      return response;
+    }
+
+    const candidateModels = getCandidateModels(config, modelName);
+    if (candidateModels.length === 0) {
+      const errorBody = { error: `Model '${modelName}' not found in config`, available: getPublicModelNames(config) };
+      const response = c.json(errorBody, 404);
+      setRecordedRequestError({ message: errorBody.error });
+      setRecordedClientResponseMeta({ status: response.status, headers: response.headers });
+      setRecordedClientResponseBody({ body: errorBody });
+      finalizeRecordedRequest({});
+      return response;
+    }
+
+    let lastError: (Error & { status?: number; upstream?: string; cause?: unknown }) | undefined;
+
+    try {
+      for (const [candidateIndex, modelConfig] of candidateModels.entries()) {
+        const requestStartedAt = Date.now();
+        statusStore.recordAttempt(modelConfig.name, requestStartedAt);
+        console.log(
+          withRequestId(
+            `[REQUEST] model=${modelName} path=${c.req.path} target=${getUpstreamURL(modelConfig)} candidate=${modelConfig.name}`,
+          ),
+        );
+
+        try {
+          if (modelConfig.provider !== "openai-image") {
+            throw Object.assign(new Error(`Model '${modelConfig.name}' provider '${modelConfig.provider}' cannot handle image requests`), {
+              status: 400,
+            });
+          }
+
+          const result = await passthroughRawRequest(
+            modelConfig,
+            bytes,
+            c.req.raw.headers,
+            {
+              ...upstreamOptions,
+              attemptIndex: candidateIndex + 1,
+              modelName: modelConfig.name,
+              imageOperation,
+              recordedRequestBody: recordedBody,
+            },
+          );
+          statusStore.recordSuccess(modelConfig.name, Date.now() - requestStartedAt, result.timing.ttfbMs, undefined, requestStartedAt);
+
+          const responseHeaders: Record<string, string> = {};
+          for (const [key, value] of result.headers.entries()) {
+            if (!HOP_BY_HOP_HEADERS.has(key.toLowerCase())) {
+              responseHeaders[key] = value;
+            }
+          }
+          const response = new Response(result.responseText, { status: result.status, headers: responseHeaders });
+          setRecordedClientResponseMeta({ status: response.status, headers: response.headers });
+          setRecordedClientResponseBody({ body: result.body });
+          finalizeRecordedRequest({});
+          return response;
+        } catch (error) {
+          const err = error as Error & { status?: number; upstream?: string; cause?: unknown };
+          fallbackFailureTracker.recordFailure(modelConfig.name, requestStartedAt);
+          statusStore.recordFailure(modelConfig.name, Date.now() - requestStartedAt, requestStartedAt);
+          lastError = err;
+          console.warn(
+            orange(
+              withRequestId(
+                `[MODEL FAILED] requested=${modelName} candidate=${modelConfig.name} path=${c.req.path} target=${getUpstreamURL(modelConfig)} message=${err.message}`,
+              ),
+            ),
+          );
+        }
+      }
+
+      if (lastError) {
+        setRecordedRequestError({ message: lastError.message });
+        const status = lastError.status && lastError.status >= 400 && lastError.status < 600 ? lastError.status : 502;
+        const errorBody = {
+          error: lastError.message,
+          ...(lastError.upstream ? { upstream: lastError.upstream } : {}),
+        };
+        const response = c.json(errorBody, status);
+        setRecordedClientResponseMeta({ status: response.status, headers: response.headers });
+        setRecordedClientResponseBody({ body: errorBody });
+        finalizeRecordedRequest({});
+        return response;
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setRecordedRequestError({ message });
+      const response = c.json({ error: message }, 500);
+      setRecordedClientResponseMeta({ status: response.status, headers: response.headers });
+      setRecordedClientResponseBody({ body: { error: message } });
       finalizeRecordedRequest({});
       return response;
     }
@@ -990,6 +1156,8 @@ app.get("/", (c) => {
       chat: "POST /v1/chat/completions",
       responses: "POST /v1/responses",
       messages: "POST /v1/messages",
+      imageGenerations: "POST /v1/images/generations",
+      imageEdits: "POST /v1/images/edits",
     },
   });
 });
@@ -1088,6 +1256,8 @@ app.get("/v1/models", (c) => {
 app.post("/v1/chat/completions", createRoute("openai-chat"));
 app.post("/v1/responses", createRoute("openai-responses"));
 app.post("/v1/messages", createRoute("anthropic"));
+app.post("/v1/images/generations", createImageRoute("generations"));
+app.post("/v1/images/edits", createImageRoute("edits"));
 
 // ─── Start ──────────────────────────────────────────────────────────────────
 

@@ -4,6 +4,7 @@ import type { StreamFormat } from "./converters/streams.js";
 
 export const DEFAULT_RECORD_MAX_SIZE = 10;
 export const DEFAULT_TTFB_TIMEOUT = 5000;
+export const DEFAULT_OPENAI_IMAGE_TTFB_TIMEOUT = 300000;
 
 export interface ModelConfig {
   name: string;
@@ -155,7 +156,8 @@ function normalizeModelConfig(model: ModelConfig, defaultTTFBTimeout?: number): 
     model.bodyExpression === undefined || model.bodyExpression === null || model.bodyExpression === ""
       ? undefined
       : String(model.bodyExpression);
-  const ttfb_timeout = normalizeTimeout(model.ttfb_timeout, `models.${model.name || "<unknown>"}.ttfb_timeout`) ?? defaultTTFBTimeout;
+  const modelTTFBTimeout = normalizeTimeout(model.ttfb_timeout, `models.${model.name || "<unknown>"}.ttfb_timeout`);
+  const ttfb_timeout = modelTTFBTimeout ?? (model.provider === "openai-image" ? DEFAULT_OPENAI_IMAGE_TTFB_TIMEOUT : defaultTTFBTimeout);
   const image = model.image === undefined ? true : !!model.image;
   const ignore_invalid_history = normalizeBoolean(model.ignore_invalid_history, `models.${model.name || "<unknown>"}.ignore_invalid_history`, true);
   const proxy = normalizeProxyUrl(model.proxy, `models.${model.name || "<unknown>"}.proxy`);
@@ -209,8 +211,8 @@ export function materializeConfig(document: ParsedConfigDocument, options?: Mate
     if (!m.provider) throw new Error(`Model '${m.name}' missing 'provider'`);
     if (!m.base_url) throw new Error(`Model '${m.name}' missing 'base_url'`);
     if (!m.model) throw new Error(`Model '${m.name}' missing 'model'`);
-    if (!["openai-chat", "openai-responses", "anthropic"].includes(m.provider)) {
-      throw new Error(`Model '${m.name}' has invalid provider '${m.provider}'. Must be openai-chat, openai-responses, or anthropic`);
+    if (!["openai-chat", "openai-responses", "anthropic", "openai-image"].includes(m.provider)) {
+      throw new Error(`Model '${m.name}' has invalid provider '${m.provider}'. Must be openai-chat, openai-responses, anthropic, or openai-image`);
     }
   }
   validateFallback(models, fallback);
