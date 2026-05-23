@@ -152,6 +152,7 @@ function buildAuthTestApp(token?: string) {
   app.get("/health", (c) => c.json({ ok: true }));
   app.get("/status", (c) => c.text("status-page"));
   app.get("/record", (c) => c.text("record-page"));
+  app.post("/record/:requestId/replay", (c) => c.json({ ok: true, requestId: c.req.param("requestId") }));
   app.get("/admin", (c) => c.text("admin-page"));
   app.get("/v1/models", (c) => c.json({ object: "list", data: [] }));
   return app;
@@ -571,6 +572,29 @@ run("responses file tool output becomes anthropic document tool_result block", (
   assert.equal(toolResult.content[0].type, "document");
   assert.equal(toolResult.content[0].title, "tool.pdf");
   assert.equal(toolResult.content[0].source?.url, "https://example.com/tool.pdf");
+});
+
+run("chat tool message with image content preserves image when converting to responses", () => {
+  const responses = chatParamsToResponsesRequest({
+    model: "gpt-4o-mini",
+    messages: [
+      {
+        role: "tool",
+        tool_call_id: "call_img",
+        content: [
+          { type: "text", text: "tool result text" },
+          { type: "image_url", image_url: { url: "https://example.com/tool.png" } },
+        ],
+      },
+    ],
+  } as any);
+
+  const output = (responses.input as Array<{ type: string; output?: Array<{ type: string; text?: string; image_url?: string }> }>)[0];
+  assert.equal(output.type, "function_call_output");
+  assert.equal(output.output?.[0].type, "input_text");
+  assert.equal(output.output?.[0].text, "tool result text");
+  assert.equal(output.output?.[1].type, "input_image");
+  assert.equal(output.output?.[1].image_url, "https://example.com/tool.png");
 });
 
 run("string content survives chat to responses to chat", () => {
@@ -3831,6 +3855,11 @@ run("record page renders query UI and JSON tree viewer", () => {
   assert.match(html, /renderStreamBody/);
   assert.match(html, /createCopyButton/);
   assert.match(html, /复制合并 JSON/);
+  assert.match(html, /createReplayControls/);
+  assert.match(html, /\/record\/" \+ encodeURIComponent\(record\.requestId\) \+ "\/replay"/);
+  assert.match(html, /Sensitive client headers are not replayed; provider auth uses current config\./);
+  assert.match(html, /Replay disabled while in progress/);
+  assert.match(html, /Replay created new record/);
   assert.match(html, /renderStreamValue\(streamState\.reconstructed, \{ expandedDepth: 1 \}\)/);
   assert.match(html, /box-actions/);
   assert.match(html, /setInterval\(\(\) =>/);
@@ -3973,7 +4002,7 @@ await runAsync("auth middleware leaves routes open when token is not configured"
 
 await runAsync("auth middleware rejects unauthenticated requests when token is configured", async () => {
   const app = buildAuthTestApp("top-secret");
-  for (const path of ["/v1/models", "/admin", "/status", "/record"]) {
+  for (const path of ["/v1/models", "/admin", "/status", "/record", "/record/abcdef/replay"]) {
     const response = await app.request("http://localhost" + path);
     assert.equal(response.status, 401);
     assert.equal(response.headers.get("www-authenticate"), "Bearer");
@@ -4002,6 +4031,13 @@ await runAsync("auth middleware accepts bearer header, query token, and options 
     headers: { Cookie: "nanollm_auth=top-secret" },
   });
   assert.equal(cookieResponse.status, 200);
+
+  const replayResponse = await app.request("http://localhost/record/abcdef/replay", {
+    method: "POST",
+    headers: { Cookie: "nanollm_auth=top-secret" },
+  });
+  assert.equal(replayResponse.status, 200);
+  assert.deepEqual(await replayResponse.json(), { ok: true, requestId: "abcdef" });
 
   const optionsResponse = await app.request("http://localhost/v1/models", { method: "OPTIONS" });
   assert.notEqual(optionsResponse.status, 401);

@@ -151,7 +151,7 @@ const apiCors = cors({
 });
 
 app.use("*", async (c, next) => {
-  const requestId = createRequestId();
+  const requestId = getRequestId() ?? createRequestId();
   const started = Date.now();
   const logLevel = getHTTPLogLevel(c.req.path);
   const emitLog = (message: string) => {
@@ -547,6 +547,72 @@ function tryParseJSON(text: string): unknown {
   } catch {
     return text;
   }
+}
+
+const REPLAY_ALLOWED_PATHS = new Set(["/v1/chat/completions", "/v1/responses", "/v1/messages"]);
+const REPLAY_PASSTHROUGH_HEADERS = new Set(["content-type", "user-agent"]);
+const REPLAY_HEADER_OVERRIDES = new Set([
+  "authorization",
+  "cookie",
+  "host",
+  "content-length",
+  "connection",
+  "accept-encoding",
+  "x-api-key",
+  "x-nanollm-replay-of",
+]);
+
+function buildReplayHeaders(record: NonNullable<ReturnType<typeof getRecordedRequest>>, authToken?: string): Headers {
+  const headers = new Headers();
+  for (const [key, value] of Object.entries(record.clientRequest.headers ?? {})) {
+    const normalized = key.toLowerCase();
+    if (REPLAY_HEADER_OVERRIDES.has(normalized) || !REPLAY_PASSTHROUGH_HEADERS.has(normalized)) continue;
+    if (value === "[REDACTED]") continue;
+    headers.set(key, value);
+  }
+  if (!headers.has("content-type")) {
+    headers.set("content-type", "application/json");
+  }
+  headers.set("x-nanollm-replay-of", record.requestId);
+  if (authToken) {
+    headers.set("authorization", `Bearer ${authToken}`);
+  }
+  return headers;
+}
+
+async function replayRecordedRequest(record: NonNullable<ReturnType<typeof getRecordedRequest>>, config: ServerConfig) {
+  const path = record.clientRequest.path;
+  if (!REPLAY_ALLOWED_PATHS.has(path)) {
+    return {
+      ok: false as const,
+      status: 400,
+      body: { error: `Replay is not supported for path '${path}'` },
+    };
+  }
+  if (record.clientRequest.status === "in_progress") {
+    return {
+      ok: false as const,
+      status: 409,
+      body: { error: "Cannot replay an in-progress request" },
+    };
+  }
+
+  const replayRequestId = createRequestId();
+  const headers = buildReplayHeaders(record, config.auth?.token);
+  const response = await runWithRequestId(replayRequestId, async () => app.fetch(new Request(`http://127.0.0.1:${config.port}${path}`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(record.clientRequest.body ?? {}),
+  })));
+  const text = await response.text();
+  const body = text ? tryParseJSON(text) : null;
+
+  return {
+    ok: response.ok,
+    status: response.status,
+    body,
+    requestId: replayRequestId,
+  };
 }
 
 function buildStatusPayload(config: ServerConfig) {
@@ -1175,6 +1241,21 @@ app.get("/record/:requestId", (c) => {
     return c.json({ error: `Record '${requestId.slice(0, 6)}' not found`, summary: payload.summary }, 404);
   }
   return c.json(payload);
+});
+app.post("/record/:requestId/replay", async (c) => {
+  const requestId = c.req.param("requestId");
+  const record = getRecordedRequest(requestId);
+  if (!record) {
+    return c.json({ error: `Record '${requestId.slice(0, 6)}' not found`, summary: getRecordSummary() }, 404);
+  }
+
+  const result = await replayRecordedRequest(record, configManager.getActiveSnapshot().effectiveConfig);
+  return c.json({
+    ...result,
+    replayOf: record.requestId,
+    summary: getRecordSummary(),
+    note: "Sensitive client headers are not replayed; provider auth uses current config.",
+  }, result.status);
 });
 
 app.get("/admin", (c) => c.html(renderAdminConfigPage(buildConfigAdminPayload())));

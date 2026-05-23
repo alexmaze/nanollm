@@ -497,6 +497,23 @@ const STYLE = /* css */ String.raw`
         color: var(--muted);
         font-style: italic;
       }
+      .record-actions {
+        margin-top: 12px;
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        align-items: center;
+      }
+      .replay-status {
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .replay-status.success {
+        color: #0b6f51;
+      }
+      .replay-status.failure {
+        color: var(--danger);
+      }
       @media (max-width: 840px) {
         .toolbar {
           grid-template-columns: 1fr;
@@ -728,6 +745,58 @@ const SCRIPT = String.raw`
           dl.appendChild(dd);
         }
         section.appendChild(dl);
+      }
+
+      function createReplayControls(record) {
+        const wrapper = document.createElement("div");
+        wrapper.className = "record-actions";
+
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = record.clientRequest?.status === "in_progress" ? "Replay disabled while in progress" : "Replay";
+        button.disabled = record.clientRequest?.status === "in_progress";
+        wrapper.appendChild(button);
+
+        const status = document.createElement("span");
+        status.className = "replay-status";
+        status.textContent = "Sensitive client headers are not replayed; provider auth uses current config.";
+        wrapper.appendChild(status);
+
+        button.addEventListener("click", async () => {
+          if (!record.requestId) return;
+          button.disabled = true;
+          button.textContent = "Replaying...";
+          status.className = "replay-status";
+          status.textContent = "Replaying request...";
+          try {
+            const response = await fetch("/record/" + encodeURIComponent(record.requestId) + "/replay", {
+              method: "POST",
+              cache: "no-store",
+            });
+            const payload = await response.json();
+            if (payload.summary) {
+              setSummary(payload.summary);
+            }
+            if (!response.ok || !payload.requestId) {
+              status.className = "replay-status failure";
+              status.textContent = payload.error || payload.body?.error || "Replay failed";
+              return;
+            }
+
+            status.className = "replay-status success";
+            status.textContent = "Replay created new record: " + payload.requestId;
+            requestIdInput.value = payload.requestId;
+            await queryRecord();
+          } catch (error) {
+            status.className = "replay-status failure";
+            status.textContent = error instanceof Error ? error.message : "Replay failed";
+          } finally {
+            button.disabled = record.clientRequest?.status === "in_progress";
+            button.textContent = record.clientRequest?.status === "in_progress" ? "Replay disabled while in progress" : "Replay";
+          }
+        });
+
+        return wrapper;
       }
 
       function createStringNode(value) {
@@ -1474,6 +1543,7 @@ const SCRIPT = String.raw`
           ["createdAt", record.createdAt ? new Date(record.createdAt).toLocaleString("zh-CN") : "-"],
           ["error", record.error?.message ?? ""],
         ]);
+        baseSection.appendChild(createReplayControls(record));
         contentEl.appendChild(baseSection);
 
         const requestSection = createCollapsibleSection("Client Request");
