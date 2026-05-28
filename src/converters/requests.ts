@@ -231,7 +231,19 @@ function denormalizeOpenAIChatMessages(messages: NormalizedMessage[], imageEnabl
   }
 
   const merged: any[] = [];
+  const pendingToolResultMedia: any[] = [];
+  const flushToolResultMedia = () => {
+    if (pendingToolResultMedia.length === 0) return;
+    merged.push({ role: "user", content: pendingToolResultMedia.splice(0) });
+  };
   for (const message of denormalized) {
+    if (message?.__toolResultMedia) {
+      pendingToolResultMedia.push(...(Array.isArray(message.content) ? message.content : []));
+      continue;
+    }
+    if (pendingToolResultMedia.length > 0 && message?.role !== "tool") {
+      flushToolResultMedia();
+    }
     const previous = merged.at(-1);
     if (previous?.role === "assistant" && message?.role === "assistant") {
       if (previous.content === null && message.content !== null) {
@@ -286,6 +298,7 @@ function denormalizeOpenAIChatMessages(messages: NormalizedMessage[], imageEnabl
     }
     merged.push(message);
   }
+  flushToolResultMedia();
   return merged;
 }
 
@@ -773,7 +786,20 @@ function denormalizeOpenAIChatToolResultMessage(message: NormalizedMessage, iden
   }
 
   if (imageEnabled && message.parts.some((part) => part.type === "image_url")) {
-    return [{ role: "user", content: [{ type: "text", text: `Tool result for ${identifier}` }, ...message.parts.map((part) => denormalizeOpenAIChatUserPart(part, true))] }];
+    const textContent = message.parts
+      .filter((part) => part.type === "text" || part.type === "refusal")
+      .map((part) => (part as { type: "text" | "refusal"; text: string }).text)
+      .join("\n");
+    const toolContent = textContent || "[multimedia tool result returned separately]";
+    const imageContent = message.parts
+      .filter((part) => part.type === "image_url")
+      .map((part) => denormalizeOpenAIChatUserPart(part, true));
+    return [
+      legacyFunctionName
+        ? { role: "function", name: legacyFunctionName, content: toolContent }
+        : { role: "tool", tool_call_id: message.toolCallId ?? "", content: toolContent },
+      ...(imageContent.length > 0 ? [{ role: "user", content: imageContent, __toolResultMedia: true }] : []),
+    ];
   }
   // image=false fallback: keep tool/function role, drop multimedia content to avoid
   // huge base64 data URLs inflating context and breaking strict API role gateways.

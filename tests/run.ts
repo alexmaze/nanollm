@@ -574,6 +574,28 @@ run("responses file tool output becomes anthropic document tool_result block", (
   assert.equal(toolResult.content[0].source?.url, "https://example.com/tool.pdf");
 });
 
+run("responses text image tool output becomes anthropic mixed tool_result block", () => {
+  const result = responsesRequestToAnthropicMessageRequest({
+    model: "gpt-4o-mini",
+    input: [
+      {
+        type: "function_call_output",
+        call_id: "call_img",
+        output: [
+          { type: "input_text", text: "caption" },
+          { type: "input_image", image_url: "https://example.com/tool.png" },
+        ],
+      },
+    ],
+  } as any);
+
+  const toolResult = (result.messages[0].content as Array<{ type: string; content: Array<{ type: string; text?: string; source?: { url?: string } }> }>)[0];
+  assert.equal(toolResult.type, "tool_result");
+  assert.deepEqual(toolResult.content.map((part) => part.type), ["text", "image"]);
+  assert.equal(toolResult.content[0].text, "caption");
+  assert.equal(toolResult.content[1].source?.url, "https://example.com/tool.png");
+});
+
 run("chat tool message with image content preserves image when converting to responses", () => {
   const responses = chatParamsToResponsesRequest({
     model: "gpt-4o-mini",
@@ -595,6 +617,28 @@ run("chat tool message with image content preserves image when converting to res
   assert.equal(output.output?.[0].text, "tool result text");
   assert.equal(output.output?.[1].type, "input_image");
   assert.equal(output.output?.[1].image_url, "https://example.com/tool.png");
+});
+
+run("chat tool message with image content becomes anthropic tool_result block", () => {
+  const anthropic = chatParamsToAnthropicMessageRequest({
+    model: "gpt-4o-mini",
+    messages: [
+      {
+        role: "tool",
+        tool_call_id: "call_img",
+        content: [
+          { type: "text", text: "tool result text" },
+          { type: "image_url", image_url: { url: "https://example.com/tool.png" } },
+        ],
+      },
+    ],
+  } as any);
+
+  const toolResult = (anthropic.messages[0].content as Array<{ type: string; content: Array<{ type: string; text?: string; source?: { url?: string } }> }>)[0];
+  assert.equal(toolResult.type, "tool_result");
+  assert.deepEqual(toolResult.content.map((part) => part.type), ["text", "image"]);
+  assert.equal(toolResult.content[0].text, "tool result text");
+  assert.equal(toolResult.content[1].source?.url, "https://example.com/tool.png");
 });
 
 run("string content survives chat to responses to chat", () => {
@@ -1664,7 +1708,7 @@ run("anthropic tool_result block array becomes chat tool text", () => {
   assert.equal((result.messages[0] as { content: string }).content, "Sunny\n25C");
 });
 
-run("anthropic image tool_result becomes chat user multimodal fallback when image is enabled", () => {
+run("anthropic image tool_result keeps chat tool result when image is enabled", () => {
   const result = anthropicMessageRequestToChatParams({
     model: "claude-sonnet-4-5",
     max_tokens: 1024,
@@ -1687,12 +1731,53 @@ run("anthropic image tool_result becomes chat user multimodal fallback when imag
     ],
   } as any);
 
-  const fallback = result.messages[1] as { role: string; content: Array<{ type: string; text?: string; image_url?: { url?: string } }> };
-  assert.equal(fallback.role, "user");
-  assert.equal(fallback.content[0].type, "text");
-  assert.match(fallback.content[0].text ?? "", /Tool result for call_img/);
-  assert.equal(fallback.content[1].type, "image_url");
-  assert.equal(fallback.content[1].image_url?.url, "https://example.com/tool.png");
+  const tool = result.messages[1] as { role: string; tool_call_id: string; content: string };
+  assert.equal(tool.role, "tool");
+  assert.equal(tool.tool_call_id, "call_img");
+  assert.equal(tool.content, "[multimedia tool result returned separately]");
+
+  const image = result.messages[2] as { role: string; content: Array<{ type: string; image_url?: { url?: string } }> };
+  assert.equal(image.role, "user");
+  assert.equal(image.content.length, 1);
+  assert.equal(image.content[0].type, "image_url");
+  assert.equal(image.content[0].image_url?.url, "https://example.com/tool.png");
+});
+
+run("anthropic text image tool_result keeps text only in chat tool result", () => {
+  const result = anthropicMessageRequestToChatParams({
+    model: "claude-sonnet-4-5",
+    max_tokens: 1024,
+    image: true,
+    messages: [
+      {
+        role: "assistant",
+        content: [{ type: "tool_use", id: "call_img", caller: { type: "direct" }, name: "view_image", input: { path: "/tmp/a.png" } }],
+      },
+      {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "call_img",
+            content: [
+              { type: "text", text: "caption" },
+              { type: "image", source: { type: "url", url: "https://example.com/tool.png" } },
+            ],
+          },
+        ],
+      },
+    ],
+  } as any);
+
+  const tool = result.messages[1] as { role: string; tool_call_id: string; content: string };
+  assert.equal(tool.role, "tool");
+  assert.equal(tool.tool_call_id, "call_img");
+  assert.equal(tool.content, "caption");
+
+  const image = result.messages[2] as { role: string; content: Array<{ type: string; text?: string; image_url?: { url?: string } }> };
+  assert.equal(image.role, "user");
+  assert.deepEqual(image.content.map((part) => part.type), ["image_url"]);
+  assert.equal(image.content[0].image_url?.url, "https://example.com/tool.png");
 });
 
 run("anthropic image tool_result stays chat tool string fallback when image is disabled", () => {
@@ -2367,6 +2452,45 @@ run("chat image=true merges consecutive assistants with tool calls into one", ()
   assert.equal(assistant.tool_calls.length, 2);
   assert.equal(chat.messages[1].role, "tool");
   assert.equal(chat.messages[2].role, "tool");
+});
+
+run("chat image=true keeps multiple tool outputs before tool-result media", () => {
+  const chat = responsesRequestToChatParams({
+    model: "gpt-5",
+    image: true,
+    input: [
+      { type: "function_call", call_id: "call_a", name: "foo", arguments: "{}" },
+      { type: "function_call", call_id: "call_b", name: "bar", arguments: "{}" },
+      {
+        type: "function_call_output",
+        call_id: "call_a",
+        output: [
+          { type: "input_text", text: "res_a" },
+          { type: "input_image", image_url: "https://example.com/a.png" },
+        ],
+      },
+      {
+        type: "function_call_output",
+        call_id: "call_b",
+        output: [
+          { type: "input_text", text: "res_b" },
+          { type: "input_image", image_url: "https://example.com/b.png" },
+        ],
+      },
+    ],
+  } as any);
+
+  assert.equal(chat.messages.length, 4);
+  assert.equal(chat.messages[0].role, "assistant");
+  assert.equal(chat.messages[1].role, "tool");
+  assert.equal((chat.messages[1] as any).tool_call_id, "call_a");
+  assert.equal((chat.messages[1] as any).content, "res_a");
+  assert.equal(chat.messages[2].role, "tool");
+  assert.equal((chat.messages[2] as any).tool_call_id, "call_b");
+  assert.equal((chat.messages[2] as any).content, "res_b");
+  assert.equal(chat.messages[3].role, "user");
+  assert.deepEqual((chat.messages[3] as any).content.map((part: any) => part.image_url?.url), ["https://example.com/a.png", "https://example.com/b.png"]);
+  assert.equal((chat.messages[3] as any).__toolResultMedia, undefined);
 });
 
 run("responses anthropic conversion batches consecutive assistants with tool calls", () => {
