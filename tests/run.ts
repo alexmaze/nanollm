@@ -4238,7 +4238,7 @@ await runAsync("passthrough request records upstream request and response", asyn
   stopRecording();
 });
 
-await runAsync("openai-image raw passthrough records unchanged generation request", async () => {
+await runAsync("openai-image raw json generation request uses configured upstream model", async () => {
   startRecording();
   const requestId = "22345678-1234-5678-9abc-def012345678";
   let upstreamPath = "";
@@ -4256,7 +4256,7 @@ await runAsync("openai-image raw passthrough records unchanged generation reques
       res.end(JSON.stringify({ created: 1, data: [{ b64_json: "abc" }] }));
     });
   }, async (baseURL) => {
-    const rawBody = JSON.stringify({ model: "gpt-image-1", prompt: "draw a cat", size: "1024x1024" });
+    const rawBody = JSON.stringify({ model: "public-image", prompt: "draw a cat", size: "1024x1024" });
     await runWithRequestId(requestId, async () => {
       beginRecordedRequest({
         requestId,
@@ -4266,14 +4266,14 @@ await runAsync("openai-image raw passthrough records unchanged generation reques
         stream: false,
       });
       const result = await passthroughRawRequest({
-        name: "gpt-image-1",
+        name: "public-image",
         provider: "openai-image",
         base_url: baseURL,
         api_key: "test-key",
-        model: "gpt-image-1",
+        model: "upstream-image",
       }, new TextEncoder().encode(rawBody), new Headers({ "Content-Type": "application/json" }), {
         attemptIndex: 1,
-        modelName: "gpt-image-1",
+        modelName: "public-image",
         imageOperation: "generations",
         recordedRequestBody: JSON.parse(rawBody),
       });
@@ -4284,13 +4284,84 @@ await runAsync("openai-image raw passthrough records unchanged generation reques
 
   assert.equal(upstreamPath, "/images/generations");
   assert.equal(upstreamContentType, "application/json");
-  assert.equal(upstreamBody, JSON.stringify({ model: "gpt-image-1", prompt: "draw a cat", size: "1024x1024" }));
+  assert.equal(upstreamBody, JSON.stringify({ model: "upstream-image", prompt: "draw a cat", size: "1024x1024" }));
   const record = getRecordedRequest(requestId);
   assert.ok(record);
   assert.equal(record?.attempts[0].provider, "openai-image");
-  assert.deepEqual(record?.attempts[0].request.body, { model: "gpt-image-1", prompt: "draw a cat", size: "1024x1024" });
+  assert.deepEqual(record?.attempts[0].request.body, { model: "upstream-image", prompt: "draw a cat", size: "1024x1024" });
   assert.deepEqual(record?.attempts[0].response.body, { created: 1, data: [{ b64_json: "abc" }] });
   assert.deepEqual(record?.clientResponse.body, { created: 1, data: [{ b64_json: "abc" }] });
+  stopRecording();
+});
+
+await runAsync("openai-image raw multipart edit request uses configured upstream model", async () => {
+  startRecording();
+  const requestId = "22345678-1234-5678-9abc-def012345679";
+  let upstreamPath = "";
+  let upstreamModel = "";
+  let upstreamPrompt = "";
+  let upstreamFileName = "";
+  let upstreamContentType = "";
+  await withHTTPServer(async (req, res) => {
+    upstreamPath = req.url ?? "";
+    upstreamContentType = req.headers["content-type"] ?? "";
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    const request = new Request("http://localhost", {
+      method: "POST",
+      headers: req.headers as HeadersInit,
+      body: Buffer.concat(chunks),
+    });
+    const formData = await request.formData();
+    upstreamModel = String(formData.get("model"));
+    upstreamPrompt = String(formData.get("prompt"));
+    const image = formData.get("image");
+    upstreamFileName = image instanceof File ? image.name : "";
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ created: 1, data: [{ b64_json: "edit" }] }));
+  }, async (baseURL) => {
+    const formData = new FormData();
+    formData.set("model", "public-image");
+    formData.set("prompt", "edit a cat");
+    formData.set("image", new Blob(["image-bytes"], { type: "image/png" }), "cat.png");
+    const request = new Request("http://localhost", { method: "POST", body: formData });
+    const rawBody = new Uint8Array(await request.arrayBuffer());
+    const contentType = request.headers.get("content-type") ?? "";
+    await runWithRequestId(requestId, async () => {
+      beginRecordedRequest({
+        requestId,
+        path: "/v1/images/edits",
+        headers: { "Content-Type": contentType },
+        body: { model: "public-image", prompt: "edit a cat", image: { type: "file", name: "cat.png", mediaType: "image/png", size: 11 } },
+        stream: false,
+      });
+      const result = await passthroughRawRequest({
+        name: "public-image",
+        provider: "openai-image",
+        base_url: baseURL,
+        api_key: "test-key",
+        model: "upstream-image",
+      }, rawBody, new Headers({ "Content-Type": contentType }), {
+        attemptIndex: 1,
+        modelName: "public-image",
+        imageOperation: "edits",
+        recordedRequestBody: { model: "public-image", prompt: "edit a cat", image: { type: "file", name: "cat.png", mediaType: "image/png", size: 11 } },
+      });
+      setRecordedClientResponseMeta({ requestId, status: 200, headers: result.headers });
+      setRecordedClientResponseBody({ requestId, body: result.body });
+    });
+  });
+
+  assert.equal(upstreamPath, "/images/edits");
+  assert.match(upstreamContentType, /^multipart\/form-data; boundary=/);
+  assert.equal(upstreamModel, "upstream-image");
+  assert.equal(upstreamPrompt, "edit a cat");
+  assert.equal(upstreamFileName, "cat.png");
+  const record = getRecordedRequest(requestId);
+  assert.ok(record);
+  assert.deepEqual(record?.attempts[0].request.body, { model: "upstream-image", prompt: "edit a cat", image: { type: "file", name: "cat.png", mediaType: "image/png", size: 11 } });
   stopRecording();
 });
 
