@@ -477,7 +477,7 @@ async function validateStreamContent(
       const text = decoder.decode(value, { stream: true });
       const events = sseParser.push(text);
 
-      if (events.length > 0) {
+      if (events.length > 0 || sseParser.hasBufferedRealData()) {
         return reconstructStream(bufferedChunks, reader);
       }
 

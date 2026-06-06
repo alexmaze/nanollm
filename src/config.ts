@@ -4,7 +4,7 @@ import type { StreamFormat } from "./converters/streams.js";
 
 export const DEFAULT_RECORD_MAX_SIZE = 10;
 export const DEFAULT_TTFB_TIMEOUT = 5000;
-export const DEFAULT_OPENAI_IMAGE_TTFB_TIMEOUT = 300000;
+export const DEFAULT_OPENAI_IMAGE_TTFB_TIMEOUT = 600000;
 
 export interface ModelConfig {
   name: string;

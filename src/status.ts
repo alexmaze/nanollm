@@ -298,7 +298,7 @@ export class SqliteStatusStore implements StatusStoreLike {
       delta.cacheReadInputTokens ?? 0,
       delta.outputTokens ?? 0,
     );
-    this.pruneOldBuckets(timestamp);
+    this.pruneOldBuckets();
   }
 
   recordAttempt(modelName: string, timestamp = Date.now()) {

@@ -539,6 +539,7 @@ const HOP_BY_HOP_HEADERS = new Set([
   "transfer-encoding",
   "upgrade",
   "content-length",
+  "content-encoding",
 ]);
 
 function tryParseJSON(text: string): unknown {
