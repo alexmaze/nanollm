@@ -167,6 +167,24 @@ async function waitForCondition(check: () => boolean, timeoutMs = 3000, interval
   throw new Error(`Condition not met within ${timeoutMs}ms`);
 }
 
+async function readStreamText(body: ReadableStream<Uint8Array>): Promise<string> {
+  const reader = body.getReader();
+  const chunks: string[] = [];
+  const decoder = new TextDecoder();
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(decoder.decode(value, { stream: true }));
+    }
+    const tail = decoder.decode();
+    if (tail) chunks.push(tail);
+  } finally {
+    reader.releaseLock();
+  }
+  return chunks.join("");
+}
+
 function parseSSEObjects(chunks: string[]): Array<{ event?: string; data: any }> {
   const text = chunks.join("");
   return text
@@ -3219,7 +3237,7 @@ models:
 
   try {
     const config = loadConfig(configPath);
-    assert.equal(config.models[0].ttfb_timeout, 300000);
+    assert.equal(config.models[0].ttfb_timeout, 600000);
     assert.equal(config.models[1].ttfb_timeout, 120000);
     assert.equal(config.models[2].ttfb_timeout, 1500);
   } finally {
@@ -3433,6 +3451,42 @@ await runAsync("stream request only enforces ttfb_timeout until response starts"
     }
 
     assert.equal(chunks.join(""), "data: first\n\ndata: done\n\n");
+  });
+});
+
+await runAsync("stream validation accepts large incomplete responses created event", async () => {
+  const largeInstructions = "x".repeat(96 * 1024);
+  const firstEvent = `event: response.created\ndata: ${JSON.stringify({
+    type: "response.created",
+    response: {
+      id: "resp_large",
+      object: "response",
+      created_at: 1,
+      status: "in_progress",
+      instructions: largeInstructions,
+    },
+  })}`;
+  const tail = "\n\nevent: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n";
+
+  await withHTTPServer(async (_req, res) => {
+    res.writeHead(200, { "Content-Type": "text/event-stream" });
+    res.write(firstEvent.slice(0, 70 * 1024));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    res.end(firstEvent.slice(70 * 1024) + tail);
+  }, async (baseURL) => {
+    const result = await passthroughStreamRequest({
+      name: "alpha",
+      provider: "openai-responses",
+      base_url: baseURL,
+      api_key: "test-key",
+      model: "upstream-alpha",
+    }, {
+      model: "alpha",
+      input: "hello",
+      stream: true,
+    });
+
+    assert.equal(await readStreamText(result.body), firstEvent + tail);
   });
 });
 
@@ -3694,21 +3748,26 @@ run("sqlite status store persists sparse buckets for a month while UI series sta
   const dir = mkdtempSync(join(os.tmpdir(), "nanollm-sqlite-status-"));
   const db = new DatabaseSync(join(dir, "status.sqlite3"));
   try {
-    const now = Date.UTC(2026, 3, 30, 12, 0, 0);
-    const visibleBucket = now - 5 * 60 * 1000;
-    const retainedButHidden = now - 7 * 60 * 60 * 1000;
-    const expired = now - 31 * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    const fiveMinutesMs = 5 * 60 * 1000;
+    const floorBucket = (timestamp: number) => Math.floor(timestamp / fiveMinutesMs) * fiveMinutesMs;
+    const visibleTimestamp = now - 5 * 60 * 1000;
+    const retainedButHiddenTimestamp = now - 7 * 60 * 60 * 1000;
+    const expiredTimestamp = now - 31 * 24 * 60 * 60 * 1000;
+    const visibleBucket = floorBucket(visibleTimestamp);
+    const retainedButHidden = floorBucket(retainedButHiddenTimestamp);
+    const expired = floorBucket(expiredTimestamp);
     const store = new SqliteStatusStore(db);
 
-    store.recordAttempt("alpha", visibleBucket);
+    store.recordAttempt("alpha", visibleTimestamp);
     store.recordSuccess("alpha", 120, 40, {
       nonCacheInputTokens: 1200,
       cacheReadInputTokens: 300,
       outputTokens: 450,
-    }, visibleBucket, 9000);
-    store.recordAttempt("alpha", retainedButHidden);
-    store.recordSuccess("alpha", 200, 50, undefined, retainedButHidden);
-    store.recordAttempt("alpha", expired);
+    }, visibleTimestamp, 9000);
+    store.recordAttempt("alpha", retainedButHiddenTimestamp);
+    store.recordSuccess("alpha", 200, 50, undefined, retainedButHiddenTimestamp);
+    store.recordAttempt("alpha", expiredTimestamp);
 
     const restarted = new SqliteStatusStore(db);
     const visibleCell = restarted.getModelSeries("alpha", now).find((cell) => cell.bucketStart === visibleBucket);
@@ -4238,7 +4297,7 @@ await runAsync("passthrough request records upstream request and response", asyn
   stopRecording();
 });
 
-await runAsync("openai-image raw passthrough records unchanged generation request", async () => {
+await runAsync("openai-image raw json generation request uses configured upstream model", async () => {
   startRecording();
   const requestId = "22345678-1234-5678-9abc-def012345678";
   let upstreamPath = "";
@@ -4256,7 +4315,7 @@ await runAsync("openai-image raw passthrough records unchanged generation reques
       res.end(JSON.stringify({ created: 1, data: [{ b64_json: "abc" }] }));
     });
   }, async (baseURL) => {
-    const rawBody = JSON.stringify({ model: "gpt-image-1", prompt: "draw a cat", size: "1024x1024" });
+    const rawBody = JSON.stringify({ model: "public-image", prompt: "draw a cat", size: "1024x1024" });
     await runWithRequestId(requestId, async () => {
       beginRecordedRequest({
         requestId,
@@ -4266,14 +4325,14 @@ await runAsync("openai-image raw passthrough records unchanged generation reques
         stream: false,
       });
       const result = await passthroughRawRequest({
-        name: "gpt-image-1",
+        name: "public-image",
         provider: "openai-image",
         base_url: baseURL,
         api_key: "test-key",
-        model: "gpt-image-1",
+        model: "upstream-image",
       }, new TextEncoder().encode(rawBody), new Headers({ "Content-Type": "application/json" }), {
         attemptIndex: 1,
-        modelName: "gpt-image-1",
+        modelName: "public-image",
         imageOperation: "generations",
         recordedRequestBody: JSON.parse(rawBody),
       });
@@ -4284,13 +4343,84 @@ await runAsync("openai-image raw passthrough records unchanged generation reques
 
   assert.equal(upstreamPath, "/images/generations");
   assert.equal(upstreamContentType, "application/json");
-  assert.equal(upstreamBody, JSON.stringify({ model: "gpt-image-1", prompt: "draw a cat", size: "1024x1024" }));
+  assert.equal(upstreamBody, JSON.stringify({ model: "upstream-image", prompt: "draw a cat", size: "1024x1024" }));
   const record = getRecordedRequest(requestId);
   assert.ok(record);
   assert.equal(record?.attempts[0].provider, "openai-image");
-  assert.deepEqual(record?.attempts[0].request.body, { model: "gpt-image-1", prompt: "draw a cat", size: "1024x1024" });
+  assert.deepEqual(record?.attempts[0].request.body, { model: "upstream-image", prompt: "draw a cat", size: "1024x1024" });
   assert.deepEqual(record?.attempts[0].response.body, { created: 1, data: [{ b64_json: "abc" }] });
   assert.deepEqual(record?.clientResponse.body, { created: 1, data: [{ b64_json: "abc" }] });
+  stopRecording();
+});
+
+await runAsync("openai-image raw multipart edit request uses configured upstream model", async () => {
+  startRecording();
+  const requestId = "22345678-1234-5678-9abc-def012345679";
+  let upstreamPath = "";
+  let upstreamModel = "";
+  let upstreamPrompt = "";
+  let upstreamFileName = "";
+  let upstreamContentType = "";
+  await withHTTPServer(async (req, res) => {
+    upstreamPath = req.url ?? "";
+    upstreamContentType = req.headers["content-type"] ?? "";
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    }
+    const request = new Request("http://localhost", {
+      method: "POST",
+      headers: req.headers as HeadersInit,
+      body: Buffer.concat(chunks),
+    });
+    const formData = await request.formData();
+    upstreamModel = String(formData.get("model"));
+    upstreamPrompt = String(formData.get("prompt"));
+    const image = formData.get("image");
+    upstreamFileName = image instanceof File ? image.name : "";
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ created: 1, data: [{ b64_json: "edit" }] }));
+  }, async (baseURL) => {
+    const formData = new FormData();
+    formData.set("model", "public-image");
+    formData.set("prompt", "edit a cat");
+    formData.set("image", new Blob(["image-bytes"], { type: "image/png" }), "cat.png");
+    const request = new Request("http://localhost", { method: "POST", body: formData });
+    const rawBody = new Uint8Array(await request.arrayBuffer());
+    const contentType = request.headers.get("content-type") ?? "";
+    await runWithRequestId(requestId, async () => {
+      beginRecordedRequest({
+        requestId,
+        path: "/v1/images/edits",
+        headers: { "Content-Type": contentType },
+        body: { model: "public-image", prompt: "edit a cat", image: { type: "file", name: "cat.png", mediaType: "image/png", size: 11 } },
+        stream: false,
+      });
+      const result = await passthroughRawRequest({
+        name: "public-image",
+        provider: "openai-image",
+        base_url: baseURL,
+        api_key: "test-key",
+        model: "upstream-image",
+      }, rawBody, new Headers({ "Content-Type": contentType }), {
+        attemptIndex: 1,
+        modelName: "public-image",
+        imageOperation: "edits",
+        recordedRequestBody: { model: "public-image", prompt: "edit a cat", image: { type: "file", name: "cat.png", mediaType: "image/png", size: 11 } },
+      });
+      setRecordedClientResponseMeta({ requestId, status: 200, headers: result.headers });
+      setRecordedClientResponseBody({ requestId, body: result.body });
+    });
+  });
+
+  assert.equal(upstreamPath, "/images/edits");
+  assert.match(upstreamContentType, /^multipart\/form-data; boundary=/);
+  assert.equal(upstreamModel, "upstream-image");
+  assert.equal(upstreamPrompt, "edit a cat");
+  assert.equal(upstreamFileName, "cat.png");
+  const record = getRecordedRequest(requestId);
+  assert.ok(record);
+  assert.deepEqual(record?.attempts[0].request.body, { model: "upstream-image", prompt: "edit a cat", image: { type: "file", name: "cat.png", mediaType: "image/png", size: 11 } });
   stopRecording();
 });
 
