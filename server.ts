@@ -659,10 +659,20 @@ function buildConfigAdminPayload() {
   } catch {
     form = buildAdminConfigFormFromEffectiveConfig(snapshot.effectiveConfig);
   }
+  const port = snapshot.effectiveConfig.port;
   return {
     ...snapshot,
     configPath,
     form,
+    endpoints: [
+      { method: "POST", path: "/v1/chat/completions", protocol: "OpenAI Chat", description: "OpenAI Chat Completions 兼容协议" },
+      { method: "POST", path: "/v1/responses", protocol: "OpenAI Responses", description: "OpenAI Responses API 兼容协议" },
+      { method: "POST", path: "/v1/messages", protocol: "Anthropic", description: "Anthropic Messages 兼容协议" },
+      { method: "POST", path: "/v1/images/generations", protocol: "OpenAI Image", description: "OpenAI 图像生成" },
+      { method: "POST", path: "/v1/images/edits", protocol: "OpenAI Image", description: "OpenAI 图像编辑" },
+      { method: "GET", path: "/v1/models", protocol: "OpenAI", description: "列出所有可用模型" },
+    ],
+    port,
   };
 }
 

@@ -357,6 +357,76 @@ const STYLE = /* css */ String.raw`
         font-family: "Consolas", "SFMono-Regular", "Menlo", monospace;
         font-size: 12px;
       }
+      .endpoint-list {
+        display: grid;
+        gap: 10px;
+      }
+      .endpoint-row {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto auto;
+        gap: 12px;
+        align-items: center;
+        padding: 12px 14px;
+        border-radius: 14px;
+        border: 1px solid rgba(143, 91, 51, 0.12);
+        background: rgba(255, 253, 249, 0.8);
+      }
+      .endpoint-method {
+        font-weight: 700;
+        font-size: 12px;
+        padding: 4px 10px;
+        border-radius: 8px;
+        text-align: center;
+        min-width: 52px;
+      }
+      .endpoint-method.post {
+        background: rgba(43, 147, 96, 0.12);
+        color: var(--success);
+      }
+      .endpoint-method.get {
+        background: rgba(143, 91, 51, 0.12);
+        color: var(--accent);
+      }
+      .endpoint-path {
+        font-family: "Consolas", "SFMono-Regular", "Menlo", monospace;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text);
+        word-break: break-all;
+      }
+      .endpoint-desc {
+        font-size: 13px;
+        color: var(--muted);
+        line-height: 1.5;
+      }
+      .endpoint-copy {
+        appearance: none;
+        border: 0;
+        border-radius: 8px;
+        padding: 6px 10px;
+        font-size: 12px;
+        cursor: pointer;
+        background: rgba(84, 67, 47, 0.05);
+        color: var(--muted);
+        white-space: nowrap;
+        transition: background 120ms ease, color 120ms ease;
+      }
+      .endpoint-copy:hover {
+        background: rgba(84, 67, 47, 0.1);
+        color: var(--text);
+      }
+      .endpoint-copy.copied {
+        background: var(--success-soft);
+        color: var(--success);
+      }
+      @media (max-width: 640px) {
+        .endpoint-row {
+          grid-template-columns: auto minmax(0, 1fr) auto;
+        }
+        .endpoint-desc {
+          grid-column: 1 / -1;
+        }
+      }
       @media (max-width: 960px) {
         .quick-links,
         .field-grid,
@@ -957,10 +1027,59 @@ const SCRIPT = /* js */ String.raw`
         });
       }
 
+      const endpointsContainer = document.getElementById("endpoints-container");
+
+      function renderEndpoints() {
+        endpointsContainer.textContent = "";
+        const endpoints = currentSnapshot.endpoints || [];
+        const port = currentSnapshot.port || window.location.port;
+        const base = window.location.protocol + "//" + window.location.hostname + (port ? ":" + port : "");
+        endpoints.forEach((ep) => {
+          const row = document.createElement("div");
+          row.className = "endpoint-row";
+
+          const method = document.createElement("span");
+          method.className = "endpoint-method " + ep.method.toLowerCase();
+          method.textContent = ep.method;
+          row.appendChild(method);
+
+          const pathWrap = document.createElement("div");
+          const pathEl = document.createElement("div");
+          pathEl.className = "endpoint-path";
+          pathEl.textContent = ep.path;
+          pathWrap.appendChild(pathEl);
+          const descEl = document.createElement("div");
+          descEl.className = "endpoint-desc";
+          descEl.textContent = ep.protocol + " · " + ep.description;
+          pathWrap.appendChild(descEl);
+          row.appendChild(pathWrap);
+
+          const copyBtn = document.createElement("button");
+          copyBtn.type = "button";
+          copyBtn.className = "endpoint-copy";
+          copyBtn.textContent = "复制 URL";
+          copyBtn.addEventListener("click", () => {
+            const url = base + ep.path;
+            navigator.clipboard.writeText(url).then(() => {
+              copyBtn.textContent = "已复制";
+              copyBtn.classList.add("copied");
+              setTimeout(() => {
+                copyBtn.textContent = "复制 URL";
+                copyBtn.classList.remove("copied");
+              }, 1500);
+            });
+          });
+          row.appendChild(copyBtn);
+
+          endpointsContainer.appendChild(row);
+        });
+      }
+
       function renderAll({ preserveScroll = false, scrollToFocus = true } = {}) {
         const scrollX = window.scrollX;
         const scrollY = window.scrollY;
         renderSnapshotMeta();
+        renderEndpoints();
         renderGlobalFields();
         renderModels();
         renderFallbackGroups();
@@ -1146,6 +1265,12 @@ function AdminConfigPage({ payload }: { payload: Record<string, unknown> }) {
                   </a>
                 </div>
               </div>
+            </section>
+
+            <section class="panel">
+              <h2>API Endpoints</h2>
+              <p class="meta">网关支持的代理协议地址。将 <code>base_url</code> 设为网关地址即可使用对应协议。</p>
+              <div class="endpoint-list" id="endpoints-container"></div>
             </section>
 
             <section class="panel">
