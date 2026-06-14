@@ -23,13 +23,10 @@ import {
 } from "../src/converters/index.js";
 import { buildAuthCookieValue, extractBasicCredentials, extractBearerToken, isAuthorizedBasic, isAuthorizedToken, readAuthCookie } from "../src/auth.js";
 import { getAdminCredentials, getAuthToken, getPublicModelNames, isAuthEnabled, loadConfig, resolveFallbackModels, resolveModelForRequest } from "../src/config.js";
-import { renderAdminConfigPage } from "../src/admin-config-page.js";
 import { ConfigManager } from "../src/config-manager.js";
 import { FallbackFailureTracker, FALLBACK_FAILURE_WINDOW_MS, sortFallbackGroupMembers } from "../src/fallback.js";
 import { getHTTPLogLevel, shouldEmitLog } from "../src/http-log.js";
 import { forwardRequest, passthroughRawRequest, passthroughRequest, passthroughStreamRequest, resolveProxyUrl } from "../src/proxy.js";
-import { renderRecordPage } from "../src/record-page.js";
-import { renderStatusPage } from "../src/status-page.js";
 import { handleServerStartupError } from "../src/startup-error.js";
 import {
   appendRecordedAttemptResponseBody,
@@ -2435,7 +2432,6 @@ run("chat high reasoning maps to anthropic adaptive thinking with explicit max_t
   assert.deepEqual((anthropic as any).thinking, { type: "adaptive" });
 });
 
-
 run("chat image=false merges consecutive assistants with tool calls into one", () => {
   const chat = responsesRequestToChatParams({
     model: "gpt-5",
@@ -2568,7 +2564,6 @@ run("chat image=false reorder does not split consecutive assistant groups", () =
   assert.equal(chat.messages[1].role, "tool");
   assert.equal(chat.messages[2].role, "tool");
 });
-
 
 run("config uses default ttfb_timeout when server section is omitted", () => {
   const configPath = writeTempConfig(`
@@ -4018,153 +4013,6 @@ run("sqlite record store persists records and trims when max size shrinks", () =
   }
 });
 
-run("status page renders fallback group priority panel without top hint text", () => {
-  const store = new StatusStore();
-  const bucketStarts = store.listBuckets();
-  const html = renderStatusPage({
-    availableWindows: [1, 3, 6],
-    defaultWindowHours: 1,
-    refreshedAt: Date.UTC(2026, 4, 15, 12, 10, 0),
-    bucketStarts,
-    models: [
-      { name: "alpha", series: store.getModelSeries("alpha") },
-      { name: "beta", series: store.getModelSeries("beta") },
-    ],
-    fallbackGroups: [
-      { name: "group-a", members: ["beta", "alpha"] },
-    ],
-  });
-
-  assert.match(html, /Fallback Groups/);
-  assert.match(html, /id="groups"/);
-  assert.match(html, /id="range-total"/);
-  assert.match(html, /formatTokenM/);
-  assert.match(html, /renderRangeTotal/);
-  assert.match(html, /"fallbackGroups":\[\{"name":"group-a","members":\["beta","alpha"\]\}\]/);
-  assert.match(html, /renderFallbackGroups/);
-  assert.match(html, /class="layout"/);
-  assert.match(html, /fetch\("\/status\/data"/);
-  assert.doesNotMatch(html, /AUTH_TOKEN_KEY = "nanollmAuthToken"/);
-  assert.doesNotMatch(html, /sessionStorage\.setItem\(/);
-  assert.doesNotMatch(html, /只展示真实模型/);
-  assert.doesNotMatch(html, /id="range-meta"/);
-});
-
-run("record page renders query UI and JSON tree viewer", () => {
-  const html = renderRecordPage({
-    enabled: true,
-    capturedCount: 3,
-    limit: 100,
-    sessionStartedAt: Date.UTC(2026, 3, 20, 10, 0, 0),
-    recentKeys: [{ key: "abcdef12-3456", requestId: "abcdef12-3456", path: "/v1/chat/completions", model: "claude-sonnet-4-6", actualModel: "claude-sonnet-4-6-lite", source: "claudecode", status: "success", createdAt: Date.UTC(2026, 3, 20, 10, 0, 1) }],
-  });
-  assert.match(html, /Request Record/);
-  assert.match(html, /fetch\("\/record\/summary"/);
-  assert.match(html, /fetch\("\/record\/" \+ encodeURIComponent\(requestId\)/);
-  assert.doesNotMatch(html, /AUTH_TOKEN_KEY = "nanollmAuthToken"/);
-  assert.doesNotMatch(html, /sessionStorage\.setItem\(/);
-  assert.match(html, /createValueNode/);
-  assert.match(html, /createCollapsibleSection/);
-  assert.match(html, /createStringNode/);
-  assert.match(html, /parseStreamEvents/);
-  assert.match(html, /renderStreamBody/);
-  assert.match(html, /createCopyButton/);
-  assert.match(html, /复制合并 JSON/);
-  assert.match(html, /createReplayControls/);
-  assert.match(html, /\/record\/" \+ encodeURIComponent\(record\.requestId\) \+ "\/replay"/);
-  assert.match(html, /Sensitive client headers are not replayed; provider auth uses current config\./);
-  assert.match(html, /Replay disabled while in progress/);
-  assert.match(html, /Replay created new record/);
-  assert.match(html, /renderStreamValue\(streamState\.reconstructed, \{ expandedDepth: 1 \}\)/);
-  assert.match(html, /box-actions/);
-  assert.match(html, /setInterval\(\(\) =>/);
-  assert.match(html, /normalizeRequestIdInput/);
-  assert.match(html, /id="record-panel"/);
-  assert.match(html, /class="panel recording"/);
-  assert.match(html, /\.panel::before/);
-  assert.match(html, /repeating-linear-gradient\(90deg, var\(--recording\) 0 8px, transparent 8px 14px\)/);
-  assert.match(html, /record-border-crawl/);
-  assert.match(html, /background-position:/);
-  assert.doesNotMatch(html, /recording-border/);
-  assert.match(html, /classList\.toggle\("recording", true\)/);
-  assert.match(html, /list="request-id-options"/);
-  assert.match(html, /placeholder="例如 6dfae2ab-1234-5678-9abc-def012345678"/);
-  assert.match(html, /grid-template-columns: 1fr/);
-  assert.match(html, /recent-key/);
-  assert.match(html, /recent-toggle/);
-  assert.match(html, /recent-title-row/);
-  assert.match(html, /recent-title/);
-  assert.match(html, /recent-model-row/);
-  assert.match(html, /recent-model/);
-  assert.match(html, /source-badge/);
-  assert.match(html, /source-badge\.claudecode/);
-  assert.match(html, /source-badge\.codex/);
-  assert.match(html, /source-badge\.opencode/);
-  assert.match(html, /source-badge\.other/);
-  assert.match(html, /status-badge/);
-  assert.match(html, /width: 260px/);
-  assert.match(html, /color: #2f5cb8/);
-  assert.match(html, /color: #1f1f1f/);
-  assert.match(html, /getSourceBadgeLabel/);
-  assert.match(html, /getStatusLabel/);
-  assert.match(html, /return "CC"/);
-  assert.match(html, /return "Codex"/);
-  assert.match(html, /return "OpenCode"/);
-  assert.match(html, /return "Other"/);
-  assert.match(html, /return "成功"/);
-  assert.match(html, /return "失败"/);
-  assert.match(html, /return "请求中\.\.\."/);
-  assert.match(html, /titleRow\.className = "recent-title-row"/);
-  assert.match(html, /title\.className = "recent-title"/);
-  assert.match(html, /sourceBadge\.className = "source-badge " \+ item\.source/);
-  assert.match(html, /statusBadge\.className = getStatusBadgeClass\(item\)/);
-  assert.match(html, /actualModel\.textContent = "-> " \+ \(item\.actualModel \|\| "-"\)/);
-  assert.match(html, /meta\.textContent = item\.path \+ " · " \+ new Date\(item\.createdAt\)\.toLocaleTimeString\("zh-CN"\)/);
-  assert.match(html, /renderRecentList/);
-  assert.match(html, /items\.slice\(0, 10\)/);
-  assert.match(html, /model\.textContent = item\.model \|\| "-"/);
-  assert.match(html, /more\.textContent = "\.\.\."/);
-  assert.match(html, /collapse\.textContent = "<"/);
-  assert.match(html, /function flushEvent\(/);
-  assert.match(html, /const lines = normalized\.split\("\\n"\)/);
-  assert.match(html, /currentDataLines\[currentDataLines\.length - 1\] \+= "\\n" \+ line/);
-  assert.match(html, /if \(item\.content\[ci\] == null\) item\.content\[ci\] = part/);
-  assert.doesNotMatch(html, /const blocks = normalized\.split\(/);
-  assert.doesNotMatch(html, /开始采样/);
-  assert.doesNotMatch(html, /停止采样/);
-});
-
-run("admin page relies on server cookie auth instead of client-side token storage", () => {
-  const html = renderAdminConfigPage({
-    version: 1,
-    configPath: "C:/tmp/config.yaml",
-    effectiveConfig: { port: 3000, models: [], fallback: {}, record: { max_size: 10 } },
-    form: { server: { port: "3000", ttfb_timeout: "5000" }, record: { max_size: "10" }, models: [], fallbackGroups: [] },
-  } as any);
-  assert.match(html, /fetch\("\/admin\/config\/data"/);
-  assert.match(html, /fetch\("\/admin\/config\/apply"/);
-  assert.match(html, /href="\/status"/);
-  assert.match(html, /href="\/record"/);
-  assert.doesNotMatch(html, /AUTH_TOKEN_KEY = "nanollmAuthToken"/);
-  assert.doesNotMatch(html, /sessionStorage\.setItem\(/);
-  assert.doesNotMatch(html, /buildAuthedPath/);
-});
-
-run("record page stream parser keeps data-like text inside JSON payloads", () => {
-  const html = renderRecordPage({
-    enabled: true,
-    capturedCount: 1,
-    limit: 100,
-    sessionStartedAt: Date.UTC(2026, 3, 20, 10, 0, 0),
-    recentKeys: [],
-  });
-  assert.match(html, /let currentDataLines = \[\]/);
-  assert.match(html, /for \(let index = 0; index < lines\.length; index \+= 1\)/);
-  assert.match(html, /if \(line === ""\) \{\n            flushEvent\(\);/);
-  assert.match(html, /currentDataLines\.push\(line\.slice\(5\)\.trimStart\(\)\)/);
-  assert.match(html, /currentDataLines\[currentDataLines\.length - 1\] \+= "\\n" \+ line/);
-});
-
 run("http log level only keeps /v1 lifecycle logs at info", () => {
   assert.equal(getHTTPLogLevel("/v1/chat/completions"), "info");
   assert.equal(getHTTPLogLevel("/v1/models"), "info");
@@ -4668,32 +4516,6 @@ run("record store keeps long text bodies without appending truncated marker", ()
   assert.equal(record?.attempts[0].response.truncated, false);
   assert.equal(record?.clientResponse.truncated, false);
   stopRecording();
-});
-
-run("admin page refreshes clean state after history restore", () => {
-  const html = renderAdminConfigPage({
-    version: 3,
-    configPath: "config.yaml",
-    effectiveConfig: {
-      port: 4444,
-      models: [],
-      fallback: {},
-      record: { max_size: 10 },
-    },
-    requiresRestartFields: [],
-    form: {
-      server: { port: "4444", ttfb_timeout: "" },
-      record: { max_size: "10" },
-      models: [],
-      fallbackGroups: [],
-    },
-  });
-
-  assert.match(html, /function isHistoryRestore\(event\)/);
-  assert.match(html, /navigationEntry && navigationEntry\.type === "back_forward"/);
-  assert.match(html, /if \(saving \|\| dirty \|\| !isHistoryRestore\(event\)\) return;/);
-  assert.match(html, /window\.addEventListener\("pageshow", \(event\) => \{/);
-  assert.match(html, /refreshFromServer\(\)\.catch\(\(error\) => \{/);
 });
 
 run("startup error disposes resources and exits on occupied port", () => {

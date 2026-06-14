@@ -16,6 +16,8 @@
     "start": "tsx server.ts",
     "start:railway": "bash scripts/start-railway.sh",
     "dev": "tsx --watch server.ts",
+    "dev:ui": "npm run dev --prefix frontend",
+    "build:ui": "npm run build --prefix frontend",
     "typecheck": "tsc --noEmit",
     "test": "tsc -p tsconfig.build.json && node .test-dist/tests/run.js",
     "converter:test": "tsc -p tsconfig.build.json && node .test-dist/src/converters/test.js"

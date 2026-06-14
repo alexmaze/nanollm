@@ -1,8 +1,9 @@
 // @ts-nocheck
 import "dotenv/config";
-import { existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { serve } from "@hono/node-server";
@@ -16,7 +17,9 @@ import { getUpstreamURL } from "./src/proxy.js";
 import { forwardRequest, forwardStreamRequest, passthroughRawRequest, passthroughRequest, passthroughStreamRequest, type OpenAIImageOperation } from "./src/proxy.js";
 import { FallbackFailureTracker, sortFallbackGroupMembers } from "./src/fallback.js";
 import { SqliteStatusStore, StatusStore, type StatusStoreLike } from "./src/status.js";
-import { renderAdminShell } from "./src/admin-shell.js";
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const FRONTEND_DIST = join(__dirname, "frontend", "dist");
 import { getHTTPLogLevel, shouldEmitLog } from "./src/http-log.js";
 import {
   normalizeOpenAIChatRequest,
@@ -1281,7 +1284,40 @@ app.post("/record/:requestId/replay", async (c) => {
   }, result.status);
 });
 
-app.get("/admin", (c) => c.html(renderAdminShell(buildConfigAdminPayload())));
+// Serve frontend SPA for /admin
+const serveFrontendFile = (c: Context, relPath: string) => {
+  const filePath = join(FRONTEND_DIST, relPath);
+  try {
+    const buf = readFileSync(filePath);
+    const ext = filePath.split(".").pop() || "";
+    const mimeMap: Record<string, string> = {
+      html: "text/html",
+      css: "text/css",
+      js: "application/javascript",
+      json: "application/json",
+      png: "image/png",
+      svg: "image/svg+xml",
+      ico: "image/x-icon",
+      woff2: "font/woff2",
+    };
+    return c.body(buf, 200, { "Content-Type": mimeMap[ext] || "application/octet-stream" });
+  } catch {
+    return null;
+  }
+};
+
+app.get("/admin", (c) => {
+  const r = serveFrontendFile(c, "index.html");
+  if (r) return r;
+  return c.text("Frontend not built. Run: npm run build --prefix frontend", 503);
+});
+
+app.get("/admin/assets/:filename{.+}", (c) => {
+  const filename = c.req.param("filename");
+  const r = serveFrontendFile(c, join("assets", filename));
+  if (r) return r;
+  return c.notFound();
+});
 app.get("/admin/config", (c) => c.redirect("/admin", 302));
 app.get("/admin/config/data", (c) => c.json(buildConfigAdminPayload()));
 app.post("/admin/config/apply", async (c) => {
