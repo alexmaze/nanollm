@@ -385,7 +385,7 @@ class RecordStore implements RecordStoreLike {
     const body = normalizeBody(input.body);
     record.clientResponse.body = body.value;
     record.clientResponse.truncated = body.truncated;
-    record.clientRequest.status = "success";
+    if (record.clientRequest.status === "in_progress") record.clientRequest.status = "success";
   }
 
   appendClientResponseBody(input: { requestId?: string; chunk: string }) {
@@ -394,7 +394,7 @@ class RecordStore implements RecordStoreLike {
     const text = appendTextBody(record.clientResponse.body, input.chunk);
     record.clientResponse.body = text.value;
     record.clientResponse.truncated = text.truncated;
-    record.clientRequest.status = "success";
+    if (record.clientRequest.status === "in_progress") record.clientRequest.status = "success";
   }
 
   setRequestError(input: { requestId?: string; message: string }) {
@@ -824,7 +824,7 @@ class SqliteRecordStore implements RecordStoreLike {
       const body = normalizeBody(input.body);
       record.clientResponse.body = body.value;
       record.clientResponse.truncated = body.truncated;
-      record.clientRequest.status = "success";
+      if (record.clientRequest.status === "in_progress") record.clientRequest.status = "success";
     });
   }
 
@@ -833,7 +833,7 @@ class SqliteRecordStore implements RecordStoreLike {
       const text = appendTextBody(record.clientResponse.body, input.chunk);
       record.clientResponse.body = text.value;
       record.clientResponse.truncated = text.truncated;
-      record.clientRequest.status = "success";
+      if (record.clientRequest.status === "in_progress") record.clientRequest.status = "success";
     });
   }
 
