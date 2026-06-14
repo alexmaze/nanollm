@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import type { ConfigSnapshot, AdminConfigForm } from "../api";
-import { api } from "../api";
+import { api, ApiError } from "../api";
 
 interface HydratedModel {
   _id: string;
@@ -88,6 +88,21 @@ export function useConfig() {
   const [status, setStatus] = useState<{ kind: "" | "success" | "warn" | "error"; text: string; params?: Record<string, string | number> }>({ kind: "", text: "" });
   const initialFormRef = useRef<HydratedForm | null>(null);
   const loadedRef = useRef(false);
+  // Keep a ref of dirty so the beforeunload listener always sees the latest value.
+  const dirtyRef = useRef(false);
+  dirtyRef.current = dirty;
+
+  // Warn before closing / reloading the tab while there are unsaved edits.
+  useEffect(() => {
+    const handler = (e: BeforeUnloadEvent) => {
+      if (dirtyRef.current) {
+        e.preventDefault();
+        e.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, []);
 
   const loadConfig = useCallback(async () => {
     const snap = await api.fetchConfig();
@@ -120,18 +135,14 @@ export function useConfig() {
     setStatus({ kind: "warn", text: "common.saving" });
     try {
       const result = await api.applyConfig(dehydrateForm(form), snapshot.version);
-      if (result.error) {
-        if (result.snapshot) {
-          setSnapshot(result.snapshot);
-          const hf = hydrateForm(result.snapshot.form);
-          setForm(hf);
-          initialFormRef.current = clone(hf);
-        }
-        setStatus({ kind: "error", text: "common.errorWithMessage", params: { message: result.error } });
+      // Success: server returns `snapshot`.
+      const next = result.snapshot;
+      if (!next) {
+        setStatus({ kind: "error", text: "common.saveFailed" });
         return;
       }
-      const hf = hydrateForm(result.snapshot.form);
-      setSnapshot(result.snapshot);
+      const hf = hydrateForm(next.form);
+      setSnapshot(next);
       setForm(hf);
       initialFormRef.current = clone(hf);
       setDirty(false);
@@ -141,7 +152,24 @@ export function useConfig() {
         text: needsRestart ? "common.saveSuccessRestart" : "common.saveSuccess",
       });
     } catch (e) {
-      setStatus({ kind: "error", text: "common.errorWithMessage", params: { message: e instanceof Error ? e.message : String(e) } });
+      // Error responses (400/409/500) now throw an ApiError whose body carries
+      // the latest server snapshot under `currentSnapshot` (NOT `snapshot`).
+      const latest = e instanceof ApiError
+        ? (e.body.currentSnapshot as ConfigSnapshot | undefined)
+        : undefined;
+      if (latest) {
+        setSnapshot(latest);
+        const hf = hydrateForm(latest.form);
+        setForm(hf);
+        initialFormRef.current = clone(hf);
+        setDirty(false);
+      }
+      const isConflict = e instanceof ApiError && e.status === 409;
+      setStatus({
+        kind: "error",
+        text: isConflict ? "records.configVersionConflict" : "common.errorWithMessage",
+        params: isConflict ? undefined : { message: e instanceof Error ? e.message : String(e) },
+      });
     } finally {
       setSaving(false);
     }

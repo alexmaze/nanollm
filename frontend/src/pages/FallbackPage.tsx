@@ -1,7 +1,12 @@
-import { Card, Flex, Box, Button, Heading, Text, Badge } from "@radix-ui/themes";
+import { Flex, Button } from "@radix-ui/themes";
+import { StackIcon, ReloadIcon, PlusIcon } from "@radix-ui/react-icons";
 import { useT } from "../i18n";
 import { useConfigContext } from "../hooks/ConfigContext";
+import PageHeader from "../components/PageHeader";
+import EmptyState from "../components/EmptyState";
 import FallbackCard from "../components/FallbackCard";
+import GuardedResetButton from "../components/GuardedResetButton";
+import PageSkeleton from "../components/PageSkeleton";
 
 let fgIdCounter = 0;
 function nextFgId() {
@@ -11,9 +16,9 @@ function nextFgId() {
 
 export default function FallbackPage() {
   const { t } = useT();
-  const { form, updateForm } = useConfigContext();
+  const { form, updateForm, refreshConfig } = useConfigContext();
 
-  if (!form) return null;
+  if (!form) return <PageSkeleton cards={3} />;
 
   const addGroup = () => {
     updateForm((prev) => ({
@@ -23,24 +28,26 @@ export default function FallbackPage() {
   };
 
   return (
-    <Flex direction="column" gap="4">
-      <Card>
-        <Flex justify="between" align="start" wrap="wrap" gap="3">
-          <Box>
-            <Heading>{t("fallback.heading")}</Heading>
-            <Text color="gray">{t("fallback.meta")}</Text>
-          </Box>
-          <Button onClick={addGroup}>{t("common.addGroup")}</Button>
-        </Flex>
-        <Flex gap="2" mt="3">
-          <Badge color="green">{t("fallback.count", { count: form.fallbackGroups.length })}</Badge>
-        </Flex>
-      </Card>
+    <Flex direction="column" gap="5">
+      <PageHeader title={t("fallback.heading")} description={t("fallback.meta")}>
+        <Button variant="ghost" onClick={refreshConfig}>
+          <ReloadIcon />
+          {t("common.refresh")}
+        </Button>
+        <GuardedResetButton />
+        <Button onClick={addGroup}>
+          <PlusIcon />
+          {t("common.addGroup")}
+        </Button>
+      </PageHeader>
 
       {form.fallbackGroups.length === 0 ? (
-        <Card>
-          <Text color="gray">{t("fallback.empty")}</Text>
-        </Card>
+        <EmptyState
+          title={t("fallback.empty")}
+          description={t("fallback.meta")}
+          icon={<StackIcon />}
+          action={<Button onClick={addGroup}>{t("common.addGroup")}</Button>}
+        />
       ) : (
         <Flex direction="column" gap="3">
           {form.fallbackGroups.map((_, i) => (

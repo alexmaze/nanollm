@@ -12,6 +12,37 @@ async function fetcher(url: string): Promise<unknown> {
   return r.json();
 }
 
+/**
+ * Shared POST helper. Parses the JSON body and — on a non-2xx response —
+ * attaches the parsed body to a thrown ApiError so callers can read
+ * server-provided context (e.g. the current snapshot on a version conflict).
+ */
+export class ApiError extends Error {
+  status: number;
+  body: Record<string, unknown>;
+  constructor(status: number, message: string, body: Record<string, unknown>) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.body = body;
+  }
+}
+
+async function postJSON<T>(url: string, payload?: unknown): Promise<T> {
+  const init: RequestInit = {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  };
+  if (payload !== undefined) init.body = JSON.stringify(payload);
+  const r = await fetch(url, init);
+  const body = (await r.json().catch(() => ({}))) as Record<string, unknown>;
+  if (!r.ok) {
+    const message = (body.error as string) || `HTTP ${r.status}`;
+    throw new ApiError(r.status, message, body);
+  }
+  return body as T;
+}
+
 export interface ConfigSnapshot {
   version: number;
   configPath: string;
@@ -55,8 +86,13 @@ export interface EndpointInfo {
 }
 
 export interface ConfigApplyResult {
-  snapshot: ConfigSnapshot;
+  /** Present on success. */
+  snapshot?: ConfigSnapshot;
+  /** Present on error responses (version conflict / validation / write failure). */
+  currentSnapshot?: ConfigSnapshot;
   requiresRestartFields?: string[];
+  appliedFields?: string[];
+  ok?: boolean;
   error?: string;
 }
 
@@ -128,11 +164,7 @@ export const api = {
   },
 
   applyConfig(config: unknown, baseVersion: number): Promise<ConfigApplyResult> {
-    return fetch("/admin/config/apply", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ config, baseVersion }),
-    }).then((r) => r.json()) as Promise<ConfigApplyResult>;
+    return postJSON<ConfigApplyResult>("/admin/config/apply", { config, baseVersion });
   },
 
   fetchStatus(): Promise<StatusData> {
@@ -148,6 +180,6 @@ export const api = {
   },
 
   replayRecord(requestId: string): Promise<{ requestId: string; summary: RecordSummary; status: number; error?: string }> {
-    return fetch(`/record/${encodeURIComponent(requestId)}/replay`, { method: "POST" }).then((r) => r.json());
+    return postJSON(`/record/${encodeURIComponent(requestId)}/replay`);
   },
 };

@@ -1,10 +1,14 @@
-import { Card, Flex, Box, Button, Heading, Text, Badge, Callout } from "@radix-ui/themes";
-import { ExclamationTriangleIcon } from "@radix-ui/react-icons";
+import { Flex, Button, Callout } from "@radix-ui/themes";
+import { ExclamationTriangleIcon, LayersIcon, ReloadIcon, PlusIcon } from "@radix-ui/react-icons";
 import { useT } from "../i18n";
 import { useConfigContext } from "../hooks/ConfigContext";
 import { useStatusData } from "../hooks/useStatus";
 import type { HydratedForm } from "../hooks/useConfig";
+import PageHeader from "../components/PageHeader";
+import EmptyState from "../components/EmptyState";
 import ModelCard from "../components/ModelCard";
+import GuardedResetButton from "../components/GuardedResetButton";
+import PageSkeleton from "../components/PageSkeleton";
 
 let localIdCounter = 0;
 function nextId(p: string) {
@@ -14,15 +18,11 @@ function nextId(p: string) {
 
 export default function ModelsPage() {
   const { t } = useT();
-  const { snapshot, form, updateForm } = useConfigContext();
+  const { snapshot, form, updateForm, refreshConfig } = useConfigContext();
   const { data: statusData } = useStatusData();
 
   if (!form || !snapshot) {
-    return (
-      <Card>
-        <Text color="gray">{t("common.loading")}</Text>
-      </Card>
-    );
+    return <PageSkeleton cards={Math.max(2, Math.min(5, form?.models.length || 2))} />;
   }
 
   const addModel = () => {
@@ -44,39 +44,37 @@ export default function ModelsPage() {
   };
 
   return (
-    <Flex direction="column" gap="4">
-      {/* Header */}
-      <Card>
-        <Flex justify="between" align="start" wrap="wrap" gap="3">
-          <Box>
-            <Heading>{t("models.heading")}</Heading>
-            <Text color="gray">{t("models.meta")}</Text>
-          </Box>
-          <Button onClick={addModel}>{t("common.addModel")}</Button>
-        </Flex>
-        <Flex gap="2" mt="3" wrap="wrap">
-          <Badge color="green">{t("models.count", { count: form.models.length })}</Badge>
-          {snapshot.lastError && (
-            <Badge color="red">{t("models.loadError")}</Badge>
-          )}
-        </Flex>
-        {snapshot.lastError && (
-          <Callout.Root color="red" mt="2">
-            <Callout.Icon>
-              <ExclamationTriangleIcon />
-            </Callout.Icon>
-            <Callout.Text>
-              {snapshot.lastError.message} ({snapshot.lastError.source})
-            </Callout.Text>
-          </Callout.Root>
-        )}
-      </Card>
+    <Flex direction="column" gap="5">
+      <PageHeader title={t("models.heading")} description={t("models.meta")}>
+        <Button variant="ghost" onClick={refreshConfig}>
+          <ReloadIcon />
+          {t("common.refresh")}
+        </Button>
+        <GuardedResetButton />
+        <Button onClick={addModel}>
+          <PlusIcon />
+          {t("common.addModel")}
+        </Button>
+      </PageHeader>
 
-      {/* Model cards */}
+      {snapshot.lastError && (
+        <Callout.Root color="red">
+          <Callout.Icon>
+            <ExclamationTriangleIcon />
+          </Callout.Icon>
+          <Callout.Text>
+            {snapshot.lastError.message} ({snapshot.lastError.source})
+          </Callout.Text>
+        </Callout.Root>
+      )}
+
       {form.models.length === 0 ? (
-        <Card>
-          <Text color="gray">{t("models.empty")}</Text>
-        </Card>
+        <EmptyState
+          title={t("models.empty")}
+          description={t("models.meta")}
+          icon={<LayersIcon />}
+          action={<Button onClick={addModel}>{t("common.addModel")}</Button>}
+        />
       ) : (
         <Flex direction="column" gap="3">
           {form.models.map((_, i) => (

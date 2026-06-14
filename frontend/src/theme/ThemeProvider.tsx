@@ -47,7 +47,14 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   return (
     <ThemeContext.Provider value={{ appearance, toggleAppearance, setAppearance }}>
-      <Theme accentColor="blue" radius="medium" appearance={appearance}>
+      <Theme
+        accentColor="indigo"
+        grayColor="slate"
+        radius="large"
+        scaling="100%"
+        panelBackground="translucent"
+        appearance={appearance}
+      >
         {children}
       </Theme>
     </ThemeContext.Provider>

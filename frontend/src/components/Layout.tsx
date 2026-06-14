@@ -1,11 +1,11 @@
 import { Outlet } from "react-router-dom";
-import { Flex, Box, Container } from "@radix-ui/themes";
+import { Flex, Box } from "@radix-ui/themes";
 import Sidebar from "./Sidebar";
-import { useConfig } from "../hooks/useConfig";
+import { useConfigContext } from "../hooks/ConfigContext";
 import { useT } from "../i18n";
 
 export default function Layout() {
-  const { saving, status, saveConfig, refreshConfig, resetConfig, snapshot } = useConfig();
+  const { saving, dirty, saveConfig, snapshot } = useConfigContext();
   const { t } = useT();
 
   const snapshotMeta = snapshot
@@ -14,20 +14,25 @@ export default function Layout() {
 
   return (
     <Flex height="100vh">
-      <Sidebar
-        saving={saving}
-        statusKind={status.kind}
-        statusText={status.text}
-        statusParams={status.params}
-        snapshotMeta={snapshotMeta}
-        onSave={saveConfig}
-        onRefresh={refreshConfig}
-        onReset={resetConfig}
-      />
-      <Box flexGrow="1" overflowY="auto" p="4">
-        <Container maxWidth="1240px" px="2">
+      <Sidebar saving={saving} dirty={dirty} snapshotMeta={snapshotMeta} onSave={saveConfig} />
+      <Box
+        flexGrow="1"
+        overflowY="auto"
+        style={{
+          backgroundColor: "var(--gray-2)",
+        }}
+      >
+        <Box
+          px="6"
+          py="5"
+          style={{
+            maxWidth: "var(--app-page-max-width)",
+            margin: "0 auto",
+            minHeight: "100%",
+          }}
+        >
           <Outlet />
-        </Container>
+        </Box>
       </Box>
     </Flex>
   );

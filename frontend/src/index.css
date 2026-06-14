@@ -1,0 +1,295 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+/* ============================================================
+   Design tokens
+   Centralized spacing, elevation, motion. Composed with Radix
+   color/scale tokens (--gray-*, --accent-*, --radius-*, ...).
+   ============================================================ */
+:root {
+  /* layout */
+  --app-sidebar-width: 240px;
+  --app-header-height: 64px;
+  --app-page-max-width: 1280px;
+
+  /* spacing rhythm (multiples of 4) */
+  --space-page-x: 32px;
+  --space-page-y: 28px;
+  --space-section: 28px;
+  --space-card: 16px;
+
+  /* elevation */
+  --app-card-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 1px 3px rgba(0, 0, 0, 0.05);
+  --app-card-shadow-hover: 0 4px 16px rgba(0, 0, 0, 0.08), 0 2px 4px rgba(0, 0, 0, 0.04);
+  --app-overlay-shadow: 0 12px 32px rgba(0, 0, 0, 0.16), 0 4px 8px rgba(0, 0, 0, 0.08);
+  --app-floating-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+
+  /* motion */
+  --app-transition: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+  --app-transition-fast: 100ms cubic-bezier(0.4, 0, 0.2, 1);
+  --app-transition-slow: 220ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* ============================================================
+   Global transition polish
+   ============================================================ */
+.rt-Card,
+.rt-Button,
+.rt-IconButton,
+.rt-TextFieldRoot,
+.rt-SelectTrigger,
+.rt-Badge {
+  transition: background-color var(--app-transition),
+    border-color var(--app-transition),
+    box-shadow var(--app-transition),
+    transform var(--app-transition),
+    color var(--app-transition);
+}
+
+/* ============================================================
+   Focus visibility
+   A consistent, accent-tinted focus ring for keyboard users.
+   ============================================================ */
+:focus-visible {
+  outline: 2px solid var(--accent-9);
+  outline-offset: 2px;
+  border-radius: var(--radius-2);
+}
+
+.rt-IconButton:focus-visible,
+.rt-Button:focus-visible {
+  outline-offset: 2px;
+}
+
+/* ============================================================
+   Scrollbars (WebKit + Firefox)
+   ============================================================ */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--gray-a6) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--gray-a6);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--gray-a8);
+}
+
+pre {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+/* ============================================================
+   Status dot
+   Pulses only when there is genuinely no fresh data.
+   ============================================================ */
+@keyframes pulse-soft {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+.app-status-dot[data-status="no-data"] {
+  animation: pulse-soft 1.6s ease-in-out infinite;
+}
+
+/* ============================================================
+   Navigation item
+   Replaces the inline JS hover hack in NavItem.tsx.
+   ============================================================ */
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: 8px 12px;
+  border-radius: var(--radius-3);
+  border-left: 3px solid transparent;
+  background-color: transparent;
+  color: var(--gray-11);
+  text-decoration: none;
+  cursor: pointer;
+  transition: background-color var(--app-transition-fast),
+    color var(--app-transition-fast),
+    border-color var(--app-transition-fast);
+}
+
+.nav-item:hover {
+  background-color: var(--gray-3);
+  color: var(--gray-12);
+}
+
+.nav-item[data-active="true"] {
+  border-left-color: var(--accent-9);
+  background-color: var(--accent-3);
+  color: var(--accent-11);
+}
+
+.nav-item[data-active="true"]:hover {
+  background-color: var(--accent-4);
+}
+
+/* ============================================================
+   Surfaces / cards
+   ============================================================ */
+.app-hover-card {
+  transition: box-shadow var(--app-transition), transform var(--app-transition);
+}
+
+.app-hover-card:hover {
+  box-shadow: var(--app-card-shadow-hover);
+  transform: translateY(-1px);
+}
+
+/* ============================================================
+   Truncate + section helpers
+   ============================================================ */
+.app-truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.app-section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--gray-10);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 8px 12px;
+}
+
+/* ============================================================
+   Form fields
+   Reusable label + control vertical layout.
+   ============================================================ */
+.form-field {
+  display: flex;
+  flex-direction: column;
+}
+
+.form-field > label {
+  color: var(--gray-11);
+  font-size: var(--font-size-2);
+  font-weight: 500;
+  margin-bottom: var(--space-2);
+}
+
+.form-field-help {
+  color: var(--gray-10);
+  font-size: var(--font-size-1);
+  margin-top: var(--space-1);
+  line-height: 1.4;
+}
+
+.form-field-error {
+  color: var(--red-10);
+  font-size: var(--font-size-1);
+  margin-top: var(--space-1);
+  line-height: 1.4;
+}
+
+/* ============================================================
+   Health heatmap cells
+   ============================================================ */
+.health-cell {
+  display: inline-block;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.health-cell-button {
+  border-radius: 4px;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  cursor: pointer;
+  padding: 0;
+  transition: transform var(--app-transition-fast),
+    box-shadow var(--app-transition-fast);
+}
+
+.health-cell-button:hover {
+  transform: scale(1.18);
+  box-shadow: 0 0 0 2px var(--gray-a5);
+}
+
+/* ============================================================
+   Native <details> disclosure
+   Smooth + consistent styling for JsonTree / StreamEvents / sections.
+   ============================================================ */
+details > summary {
+  list-style: none;
+  cursor: pointer;
+  user-select: none;
+}
+
+details > summary::-webkit-details-marker {
+  display: none;
+}
+
+details[open] > summary {
+  margin-bottom: var(--space-2);
+}
+
+/* ============================================================
+   Toast animations
+   ============================================================ */
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(20px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes toast-out {
+  from { opacity: 1; transform: translateX(0); }
+  to { opacity: 0; transform: translateX(20px); }
+}
+
+.toast-enter {
+  animation: toast-in 200ms ease-out;
+}
+
+.toast-exit {
+  animation: toast-out 180ms ease-in forwards;
+}
+
+/* ============================================================
+   Dirty (unsaved) indicator dot on the Save button
+   ============================================================ */
+.dirty-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: currentColor;
+  margin-right: 6px;
+  vertical-align: middle;
+}

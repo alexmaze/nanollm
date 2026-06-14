@@ -1,9 +1,10 @@
 import { useRef, useCallback } from "react";
-import { Card, Flex, Box, Button, Text, TextField, Select, Callout, IconButton } from "@radix-ui/themes";
-import { DragHandleDots2Icon, ArrowUpIcon, ArrowDownIcon, TrashIcon } from "@radix-ui/react-icons";
+import { Card, Flex, Box, Button, Text, TextField, Select, IconButton, Badge, Tooltip } from "@radix-ui/themes";
+import { DragHandleDots2Icon, ArrowUpIcon, ArrowDownIcon, TrashIcon, PlusIcon } from "@radix-ui/react-icons";
 import { useT } from "../i18n";
 import { useConfigContext } from "../hooks/ConfigContext";
 import type { HydratedForm } from "../hooks/useConfig";
+import ConfirmDialog from "./ConfirmDialog";
 
 let memberIdCounter = 0;
 function nextMemberId() {
@@ -119,42 +120,53 @@ export default function FallbackCard({ groupIndex }: FallbackCardProps) {
   );
 
   return (
-    <Card size="2">
-      <Flex justify="between" align="center" mb="3">
-        <Text weight="bold" size="3">
-          {group.name?.trim() || t("fallback.unnamedGroup", { index: groupIndex + 1 })}
-        </Text>
-        <Button color="red" variant="ghost" size="2" onClick={deleteGroup}>
-          {t("common.delete")}
-        </Button>
+    <Card size="2" className="app-hover-card">
+      <Flex justify="between" align="start" gap="3" wrap="wrap" mb="4">
+        <Box style={{ flex: 1, minWidth: 240 }}>
+          <Text as="label" size="2" weight="medium" color="gray">
+            {t("fallback.labelName")}
+          </Text>
+          <TextField.Root
+            ref={nameInputRef}
+            mt="2"
+            value={group.name}
+            placeholder={t("fallback.namePlaceholder")}
+            onChange={(e) => setName(e.target.value)}
+          />
+        </Box>
+        <Flex align="center" gap="2" mt="5">
+          <Badge variant="soft" color="indigo">
+            {group.members.length} {t("status.models")}
+          </Badge>
+          <ConfirmDialog
+            title={t("fallback.confirmDeleteTitle")}
+            description={t("fallback.confirmDeleteDescription", { name: group.name || t("fallback.unnamedGroup", { index: groupIndex + 1 }) })}
+            confirmLabel={t("common.delete")}
+            cancelLabel={t("common.no")}
+            destructive
+            onConfirm={deleteGroup}
+            trigger={
+              <IconButton color="red" variant="ghost" size="2" aria-label={t("common.delete")}>
+                <TrashIcon />
+              </IconButton>
+            }
+          />
+        </Flex>
       </Flex>
 
-      <Box>
-        <Text as="label" size="2" weight="bold" color="gray">
-          {t("fallback.labelName")}
-        </Text>
-        <TextField.Root
-          ref={nameInputRef}
-          mt="1"
-          value={group.name}
-          placeholder={t("fallback.namePlaceholder")}
-          onChange={(e) => setName(e.target.value)}
-        />
-      </Box>
-
-      <Flex direction="column" gap="2" mt="3">
+      <Flex direction="column" gap="2">
         {duplicates.length > 0 && (
-          <Callout.Root color="red">
-            <Callout.Text>
-              {t("fallback.duplicateMembers", { names: duplicates.join(", ") })}
-            </Callout.Text>
-          </Callout.Root>
+          <Text size="2" color="red" mb="1">
+            {t("fallback.duplicateMembers", { names: duplicates.join(", ") })}
+          </Text>
         )}
 
         {group.members.length === 0 && (
-          <Text size="2" color="gray">
-            {t("fallback.noMembers")}
-          </Text>
+          <Box py="2">
+            <Text size="2" color="gray">
+              {t("fallback.noMembers")}
+            </Text>
+          </Box>
         )}
 
         {group.members.map((member, mi) => {
@@ -165,7 +177,11 @@ export default function FallbackCard({ groupIndex }: FallbackCardProps) {
               align="center"
               gap="2"
               p="2"
-              style={{ border: "1px solid var(--gray-4)", borderRadius: "var(--radius-3)" }}
+              style={{
+                border: "1px solid var(--gray-5)",
+                borderRadius: "var(--radius-3)",
+                backgroundColor: "var(--gray-1)",
+              }}
               draggable
               onDragStart={(e) => {
                 e.dataTransfer.setData("text/plain", JSON.stringify(getDragData(mi)));
@@ -188,20 +204,17 @@ export default function FallbackCard({ groupIndex }: FallbackCardProps) {
                 } catch {}
               }}
             >
-              <IconButton variant="ghost" size="1" title={t("fallback.dragHandle")} style={{ cursor: "grab" }}>
-                <DragHandleDots2Icon />
-              </IconButton>
+              <Tooltip content={t("fallback.dragHandle")}>
+                <IconButton variant="ghost" size="1" aria-label={t("fallback.dragHandle")} style={{ cursor: "grab" }}>
+                  <DragHandleDots2Icon />
+                </IconButton>
+              </Tooltip>
 
-              <Select.Root
-                value={member.value || undefined}
-                onValueChange={(v) => setMemberValue(mi, v)}
-              >
+              <Select.Root value={member.value || undefined} onValueChange={(v) => setMemberValue(mi, v)}>
                 <Select.Trigger style={{ flex: 1 }} placeholder={t("fallback.selectModel")} />
                 <Select.Content>
                   <Select.Group>
-                    <Select.Label>
-                      {options.length === 0 ? t("fallback.noModelsAvailable") : t("fallback.selectModel")}
-                    </Select.Label>
+                    <Select.Label>{options.length === 0 ? t("fallback.noModelsAvailable") : t("fallback.selectModel")}</Select.Label>
                     {options
                       .filter((o) => !used.has(o) || o === member.value)
                       .map((o) => (
@@ -213,14 +226,14 @@ export default function FallbackCard({ groupIndex }: FallbackCardProps) {
                 </Select.Content>
               </Select.Root>
 
-              <Flex gap="1">
-                <IconButton variant="ghost" size="1" title={t("fallback.moveUp")} onClick={() => moveMember(mi, mi - 1)} disabled={mi === 0}>
+              <Flex gap="2">
+                <IconButton variant="ghost" size="1" aria-label={t("fallback.moveUp")} onClick={() => moveMember(mi, mi - 1)} disabled={mi === 0}>
                   <ArrowUpIcon />
                 </IconButton>
-                <IconButton variant="ghost" size="1" title={t("fallback.moveDown")} onClick={() => moveMember(mi, mi + 1)} disabled={mi === group.members.length - 1}>
+                <IconButton variant="ghost" size="1" aria-label={t("fallback.moveDown")} onClick={() => moveMember(mi, mi + 1)} disabled={mi === group.members.length - 1}>
                   <ArrowDownIcon />
                 </IconButton>
-                <IconButton variant="ghost" size="1" color="red" title={t("common.delete")} onClick={() => deleteMember(mi)}>
+                <IconButton color="red" variant="ghost" size="1" aria-label={t("common.delete")} onClick={() => deleteMember(mi)}>
                   <TrashIcon />
                 </IconButton>
               </Flex>
@@ -229,7 +242,8 @@ export default function FallbackCard({ groupIndex }: FallbackCardProps) {
         })}
       </Flex>
 
-      <Button variant="outline" mt="2" onClick={addMember}>
+      <Button variant="soft" mt="3" size="2" onClick={addMember} disabled={options.length === 0}>
+        <PlusIcon />
         {t("common.addMember")}
       </Button>
     </Card>
