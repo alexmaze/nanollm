@@ -80,8 +80,15 @@ function resolveConfigPath(argv: string[]): string {
     return cwdConfigPath;
   }
 
+  const xdgConfigHome = process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
+  const defaultConfigPath = join(xdgConfigHome, "nanollm", "config.yaml");
+  if (existsSync(defaultConfigPath)) {
+    console.log(`[CONFIG] using default config: ${defaultConfigPath}`);
+    return defaultConfigPath;
+  }
+
   throw new Error(
-    "Missing config file. Pass --config /path/to/config.yaml, set CONFIG_PATH, or place config.yaml in the current directory.",
+    "Missing config file. Pass --config /path/to/config.yaml, set CONFIG_PATH, place config.yaml in the current directory, or place it at $XDG_CONFIG_HOME/nanollm/config.yaml (defaults to ~/.config/nanollm/config.yaml).",
   );
 }
 
