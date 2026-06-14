@@ -56,35 +56,34 @@ import { stringify as stringifyYAML } from "yaml";
 
 // ─── Config ─────────────────────────────────────────────────────────────────
 
-function resolveConfigPath(argv: string[]): string {
+function resolveConfigPath(argv: string[]): { path: string; source: string } {
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--config") {
       const value = argv[index + 1];
       if (!value) throw new Error("Missing value for --config");
-      return resolve(process.cwd(), value);
+      return { path: resolve(process.cwd(), value), source: "cli" };
     }
     if (arg.startsWith("--config=")) {
       const value = arg.slice("--config=".length);
       if (!value) throw new Error("Missing value for --config");
-      return resolve(process.cwd(), value);
+      return { path: resolve(process.cwd(), value), source: "cli" };
     }
   }
 
   if (process.env.CONFIG_PATH) {
-    return resolve(process.cwd(), process.env.CONFIG_PATH);
+    return { path: resolve(process.cwd(), process.env.CONFIG_PATH), source: "env" };
   }
 
   const cwdConfigPath = resolve(process.cwd(), "config.yaml");
   if (existsSync(cwdConfigPath)) {
-    return cwdConfigPath;
+    return { path: cwdConfigPath, source: "cwd" };
   }
 
   const xdgConfigHome = process.env.XDG_CONFIG_HOME || join(homedir(), ".config");
   const defaultConfigPath = join(xdgConfigHome, "nanollm", "config.yaml");
   if (existsSync(defaultConfigPath)) {
-    console.log(`[CONFIG] using default config: ${defaultConfigPath}`);
-    return defaultConfigPath;
+    return { path: defaultConfigPath, source: "default" };
   }
 
   throw new Error(
@@ -131,7 +130,9 @@ async function openSqliteDatabase(dbPath: string) {
 }
 
 const startupArgs = process.argv.slice(2);
-const configPath = resolveConfigPath(startupArgs);
+const configResolved = resolveConfigPath(startupArgs);
+const configPath = configResolved.path;
+const configSource = configResolved.source;
 const storageMode = resolveStorageMode(startupArgs);
 const sqlitePath = join(homedir(), ".nanollm", "nanollm.sqlite3");
 const sqliteDb = storageMode === "sqlite" ? await openSqliteDatabase(sqlitePath) : undefined;
@@ -1352,16 +1353,28 @@ app.post("/v1/images/edits", createImageRoute("edits"));
 
 const startupConfig = startupSnapshot.effectiveConfig;
 const server = serve({ fetch: app.fetch, port: startupConfig.port }, (info) => {
-  console.log(`nanollm gateway listening on http://localhost:${info.port}`);
-  console.log(`Storage: ${storageMode}${sqliteDb ? ` (${sqlitePath})` : ""}`);
-  console.log(`Models: ${startupConfig.models.map((m) => m.name).join(", ") || "(none)"}`);
-  console.log(
-    `Fallback groups: ${
-      Object.entries(startupConfig.fallback)
-        .map(([group, models]) => `${group}=[${models.join(", ")}]`)
-        .join("; ") || "(none)"
-    }`,
-  );
+  const base = `http://localhost:${info.port}`;
+  const modelCount = startupConfig.models.length;
+  const fallbackCount = Object.keys(startupConfig.fallback).length;
+  const authEnabled = Boolean(startupConfig.auth?.token);
+
+  const lines = [
+    "",
+    `  nanollm gateway`,
+    "",
+    `  Listening:   ${base}`,
+    `  Config:      ${configPath} (${configSource})`,
+    `  Storage:     ${storageMode}${sqliteDb ? ` (${sqlitePath})` : ""}`,
+    `  Models:      ${modelCount > 0 ? `${modelCount} (${startupConfig.models.map((m) => m.name).join(", ")})` : "(none)"}`,
+    `  Fallbacks:   ${fallbackCount > 0 ? `${fallbackCount} group${fallbackCount > 1 ? "s" : ""} (${Object.entries(startupConfig.fallback).map(([g, m]) => `${g}=[${m.join(", ")}]`).join("; ")})` : "(none)"}`,
+    `  Auth:        ${authEnabled ? "enabled" : "disabled"}`,
+    "",
+    `  Status:      ${base}/status`,
+    `  Admin:       ${base}/admin`,
+    `  Record:      ${base}/record`,
+    "",
+  ];
+  console.log(lines.join("\n"));
 });
 
 server.once("error", (error: Error & { code?: string }) => {
