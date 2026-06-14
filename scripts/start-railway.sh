@@ -8,15 +8,21 @@ STORAGE_MODE="${NANOLLM_STORAGE:-sqlite}"
 mkdir -p "$(dirname "$CONFIG_PATH")"
 
 if [ ! -f "$CONFIG_PATH" ]; then
-  if [ -z "${NANOLLM_AUTH_TOKEN:-}" ]; then
-    echo "Missing NANOLLM_AUTH_TOKEN. Set it in Railway Variables before the first start." >&2
+  if [ -z "${NANOLLM_ADMIN_PASSWORD:-}" ]; then
+    echo "Missing NANOLLM_ADMIN_PASSWORD. Set it in Railway Variables before the first start." >&2
     exit 1
   fi
 
   cat > "$CONFIG_PATH" <<EOF
 server:
   auth:
-    token: ${NANOLLM_AUTH_TOKEN}
+    admin:
+      enabled: true
+      username: ${NANOLLM_ADMIN_USERNAME:-admin}
+      password: ${NANOLLM_ADMIN_PASSWORD}
+    api:
+      enabled: ${NANOLLM_API_AUTH_ENABLED:-false}
+      token: ${NANOLLM_API_TOKEN:-}
 
 models: []
 fallback: {}

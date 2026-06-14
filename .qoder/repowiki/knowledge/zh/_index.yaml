@@ -1,0 +1,14 @@
+# 知识卡导出索引文件
+schema_version: 1
+locale: zh-CN
+branch: master
+exported_at: "2026-06-14T08:55:12Z"
+modules:
+    "":
+        dir_name: 多协议 LLM 网关核心
+        title: 多协议 LLM 网关核心
+        scope: []
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []

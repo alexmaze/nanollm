@@ -88,39 +88,41 @@ gpt-5.4
 ```
 这样5个模型，其中`gpt-5.4`是兜底分组名，当使用这个模型的时候，会在下属列表的模型中寻找可用的模型，尝试顺序为按`max(0, 最近5min失败次数-1)`升序；如果分数相同，则保持配置里的原始顺序。
 
-### Bearer Key 认证
+### 认证
 
-如果你希望给整个 nanollm 网关加一层访问认证，可以配置：
+nanollm 支持两个独立的认证维度，默认全部关闭：
+
+- **Admin 面板**：HTTP Basic Auth，浏览器自动弹出登录框
+- **API 接口**：Bearer Token，兼容 OpenAI SDK 标准调用
 
 ```yaml
 server:
   auth:
-    token: ${NANOLLM_AUTH_TOKEN}
+    admin:
+      enabled: true
+      username: admin
+      password: ${NANOLLM_ADMIN_PASSWORD}
+    api:
+      enabled: true
+      token: ${NANOLLM_API_TOKEN}
 ```
 
-- `server.auth.token` 为空或不配置时，认证关闭。
-- 运行中，修改 `server.auth.token` 会写回配置文件，但和 `server.port` 一样需要重启进程后才会真正生效。
-- 一旦配置，除了 `/health` 以外，其余入口都要求认证，包括 `/`、`/status`、`/record`、`/admin`、`/v1/models` 和 `/v1/*`。
+- `enabled` 默认为 `false`，只有 `enabled: true` 且凭证非空时，该维度才生效。
+- 两个维度独立工作，可以只开启其中一个。
+- 运行中修改认证配置会写回配置文件，但和 `server.port` 一样需要重启进程后才会真正生效。
 - 认证只保护访问 nanollm 本身，不会替代或覆盖 `models[*].api_key`，也不会转发到上游模型供应商。
+- `/`、`/health` 始终不要求认证。
 
-API 客户端使用标准 Bearer header：
+**Admin 面板**：浏览器打开 `/admin` 时会自动弹出 Basic Auth 登录框，输入配置的用户名和密码即可。浏览器会自动维持登录状态，关闭标签页后重新弹出。
+
+**API 接口**：使用标准 Bearer header：
 
 ```bash
 curl http://localhost:3000/v1/models \
-  -H "Authorization: Bearer $NANOLLM_AUTH_TOKEN"
+  -H "Authorization: Bearer $NANOLLM_API_TOKEN"
 ```
 
 如果你用 OpenAI SDK 或兼容客户端，把这个 token 当成访问 nanollm 的 API key 即可。
-
-浏览器打开页面时，可以用一次性 URL token 入口：
-
-```text
-http://localhost:3000/admin?token=YOUR_TOKEN
-http://localhost:3000/status?token=YOUR_TOKEN
-http://localhost:3000/record?token=YOUR_TOKEN
-```
-
-首次用 `?token=` 或 Bearer header 认证成功后，nanollm 会写入同源认证 cookie。之后同一浏览器里直接访问 `/admin`、`/status`、`/record`，以及这些页面内部的 `fetch` 请求，都不需要再重复带 `?token=`。
 
 ### 动态请求体表达式
 

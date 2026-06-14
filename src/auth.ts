@@ -17,6 +17,46 @@ export function isAuthorizedToken(expectedToken: string | undefined, candidateTo
   return timingSafeEqual(expected, candidate);
 }
 
+export interface BasicCredentials {
+  username: string;
+  password: string;
+}
+
+export function extractBasicCredentials(headerValue: string | null | undefined): BasicCredentials | undefined {
+  if (!headerValue) return undefined;
+  const match = /^\s*Basic\s+(.+)\s*$/i.exec(headerValue);
+  if (!match) return undefined;
+  const encoded = match[1].trim();
+  if (!encoded) return undefined;
+  let decoded: string;
+  try {
+    decoded = Buffer.from(encoded, "base64").toString("utf-8");
+  } catch {
+    return undefined;
+  }
+  const colonIndex = decoded.indexOf(":");
+  if (colonIndex === -1) return undefined;
+  const username = decoded.slice(0, colonIndex);
+  const password = decoded.slice(colonIndex + 1);
+  return { username, password };
+}
+
+export function isAuthorizedBasic(
+  expected: BasicCredentials | undefined,
+  candidate: BasicCredentials | undefined,
+): boolean {
+  if (!expected) return true;
+  if (!candidate) return false;
+  const expectedUser = Buffer.from(expected.username);
+  const candidateUser = Buffer.from(candidate.username);
+  if (expectedUser.length !== candidateUser.length) return false;
+  if (!timingSafeEqual(expectedUser, candidateUser)) return false;
+  const expectedPass = Buffer.from(expected.password);
+  const candidatePass = Buffer.from(candidate.password);
+  if (expectedPass.length !== candidatePass.length) return false;
+  return timingSafeEqual(expectedPass, candidatePass);
+}
+
 export function buildAuthCookieValue(token: string): string {
   return encodeURIComponent(token);
 }

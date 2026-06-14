@@ -9,16 +9,14 @@ import { serve } from "@hono/node-server";
 import { cors } from "hono/cors";
 import { randomUUID } from "node:crypto";
 import type { ModelConfig, ServerConfig } from "./src/config.js";
-import { buildAuthCookieValue, extractBearerToken, isAuthorizedToken, readAuthCookie } from "./src/auth.js";
-import { getPublicModelNames, parseConfigText, parseSourceConfigDocument, resolveFallbackModels, resolveModel, resolveModelForRequest } from "./src/config.js";
+import { extractBasicCredentials, extractBearerToken, isAuthorizedBasic, isAuthorizedToken } from "./src/auth.js";
+import { getAdminCredentials, getAuthToken, getPublicModelNames, isAuthEnabled, parseConfigText, parseSourceConfigDocument, resolveFallbackModels, resolveModel, resolveModelForRequest } from "./src/config.js";
 import { ConfigManager } from "./src/config-manager.js";
 import { getUpstreamURL } from "./src/proxy.js";
 import { forwardRequest, forwardStreamRequest, passthroughRawRequest, passthroughRequest, passthroughStreamRequest, type OpenAIImageOperation } from "./src/proxy.js";
 import { FallbackFailureTracker, sortFallbackGroupMembers } from "./src/fallback.js";
 import { SqliteStatusStore, StatusStore, type StatusStoreLike } from "./src/status.js";
-import { renderStatusPage } from "./src/status-page.js";
-import { renderRecordPage } from "./src/record-page.js";
-import { renderAdminConfigPage } from "./src/admin-config-page.js";
+import { renderAdminShell } from "./src/admin-shell.js";
 import { getHTTPLogLevel, shouldEmitLog } from "./src/http-log.js";
 import {
   normalizeOpenAIChatRequest,
@@ -151,7 +149,6 @@ configManager.onUpdate(({ snapshot }, source) => {
   }
 });
 const app = new Hono();
-const AUTH_COOKIE_NAME = "nanollm_auth";
 const apiCors = cors({
   origin: "*",
   allowMethods: ["GET", "POST", "OPTIONS"],
@@ -192,32 +189,51 @@ app.use("*", async (c, next) => {
   return apiCors(c, next);
 });
 
+type AuthDimension = "admin" | "api" | "none";
+
+function getRouteAuthDimension(path: string): AuthDimension {
+  if (path === "/health" || path === "/") return "none";
+  if (path.startsWith("/admin") || path.startsWith("/status") || path.startsWith("/record")) return "admin";
+  if (path.startsWith("/v1/")) return "api";
+  return "none";
+}
+
 app.use("*", async (c, next) => {
   if (c.req.method === "OPTIONS") {
     return next();
   }
-  if (c.req.path === "/health") {
+
+  const dimension = getRouteAuthDimension(c.req.path);
+  if (dimension === "none") {
     return next();
   }
 
-  const authToken = configManager.getActiveSnapshot().effectiveConfig.auth?.token;
-  if (!authToken) {
-    return next();
+  const config = configManager.getActiveSnapshot().effectiveConfig;
+
+  if (dimension === "admin") {
+    const credentials = getAdminCredentials(config);
+    if (!credentials) {
+      return next();
+    }
+    const candidate = extractBasicCredentials(c.req.header("authorization"));
+    if (isAuthorizedBasic(credentials, candidate)) {
+      return next();
+    }
+    c.header("WWW-Authenticate", 'Basic realm="nanollm admin"');
+    return c.json({ error: "Unauthorized" }, 401);
   }
 
+  // api dimension
+  const apiToken = getAuthToken(config);
+  if (!apiToken) {
+    return next();
+  }
   const headerToken = extractBearerToken(c.req.header("authorization"));
-  const queryToken = c.req.query("token") || undefined;
-  const cookieToken = readAuthCookie(c.req.header("cookie"), AUTH_COOKIE_NAME);
-  if (
-    isAuthorizedToken(authToken, headerToken) ||
-    isAuthorizedToken(authToken, queryToken) ||
-    isAuthorizedToken(authToken, cookieToken)
-  ) {
-    persistAuthCookie(c, authToken);
+  if (isAuthorizedToken(apiToken, headerToken)) {
     return next();
   }
-
-  return unauthorizedResponse(c);
+  c.header("WWW-Authenticate", "Bearer");
+  return c.json({ error: "Unauthorized" }, 401);
 });
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -261,18 +277,6 @@ function writeConfigAtomic(path: string, text: string) {
   const tempPath = `${path}.${randomUUID()}.tmp`;
   writeFileSync(tempPath, text, "utf-8");
   renameSync(tempPath, path);
-}
-
-function unauthorizedResponse(c: Context) {
-  c.header("WWW-Authenticate", "Bearer");
-  return c.json({ error: "Unauthorized" }, 401);
-}
-
-function persistAuthCookie(c: Context, token: string) {
-  c.header(
-    "Set-Cookie",
-    `${AUTH_COOKIE_NAME}=${buildAuthCookieValue(token)}; Path=/; HttpOnly; SameSite=Lax`,
-  );
 }
 
 function toInputString(value: unknown): string {
@@ -607,7 +611,7 @@ async function replayRecordedRequest(record: NonNullable<ReturnType<typeof getRe
   }
 
   const replayRequestId = createRequestId();
-  const headers = buildReplayHeaders(record, config.auth?.token);
+  const headers = buildReplayHeaders(record, getAuthToken(config));
   const response = await runWithRequestId(replayRequestId, async () => app.fetch(new Request(`http://127.0.0.1:${config.port}${path}`, {
     method: "POST",
     headers,
@@ -1249,9 +1253,9 @@ app.get("/", (c) => {
 
 app.get("/health", (c) => c.json({ ok: true }));
 
-app.get("/status", (c) => c.html(renderStatusPage(buildStatusPayload(configManager.getActiveSnapshot().effectiveConfig))));
+app.get("/status", (c) => c.redirect("/admin#/models", 302));
 app.get("/status/data", (c) => c.json(buildStatusPayload(configManager.getActiveSnapshot().effectiveConfig)));
-app.get("/record", (c) => c.html(renderRecordPage(getRecordSummary())));
+app.get("/record", (c) => c.redirect("/admin#/records", 302));
 app.get("/record/summary", (c) => c.json(getRecordSummary()));
 app.get("/record/:requestId", (c) => {
   const requestId = c.req.param("requestId");
@@ -1277,12 +1281,8 @@ app.post("/record/:requestId/replay", async (c) => {
   }, result.status);
 });
 
-app.get("/admin", (c) => c.html(renderAdminConfigPage(buildConfigAdminPayload())));
-app.get("/admin/config", (c) => {
-  const token = c.req.query("token");
-  const target = token ? `/admin?token=${encodeURIComponent(token)}` : "/admin";
-  return c.redirect(target, 302);
-});
+app.get("/admin", (c) => c.html(renderAdminShell(buildConfigAdminPayload())));
+app.get("/admin/config", (c) => c.redirect("/admin", 302));
 app.get("/admin/config/data", (c) => c.json(buildConfigAdminPayload()));
 app.post("/admin/config/apply", async (c) => {
   let body: { config?: unknown; baseVersion?: unknown };
@@ -1366,7 +1366,8 @@ const server = serve({ fetch: app.fetch, port: startupConfig.port }, (info) => {
   const base = `http://localhost:${info.port}`;
   const modelCount = startupConfig.models.length;
   const fallbackCount = Object.keys(startupConfig.fallback).length;
-  const authEnabled = Boolean(startupConfig.auth?.token);
+  const adminAuthEnabled = isAuthEnabled(startupConfig, "admin");
+  const apiAuthEnabled = isAuthEnabled(startupConfig, "api");
 
   const lines = [
     "",
@@ -1377,11 +1378,12 @@ const server = serve({ fetch: app.fetch, port: startupConfig.port }, (info) => {
     `  Storage:     ${storageMode}${sqliteDb ? ` (${sqlitePath})` : ""}`,
     `  Models:      ${modelCount > 0 ? `${modelCount} (${startupConfig.models.map((m) => m.name).join(", ")})` : "(none)"}`,
     `  Fallbacks:   ${fallbackCount > 0 ? `${fallbackCount} group${fallbackCount > 1 ? "s" : ""} (${Object.entries(startupConfig.fallback).map(([g, m]) => `${g}=[${m.join(", ")}]`).join("; ")})` : "(none)"}`,
-    `  Auth:        ${authEnabled ? "enabled" : "disabled"}`,
+    `  Auth Admin:  ${adminAuthEnabled ? "enabled" : "disabled"}`,
+    `  Auth API:    ${apiAuthEnabled ? "enabled" : "disabled"}`,
     "",
-    `  Status:      ${base}/status`,
     `  Admin:       ${base}/admin`,
-    `  Record:      ${base}/record`,
+    `  Models:      ${base}/admin#/models`,
+    `  Records:     ${base}/admin#/records`,
     "",
   ];
   console.log(lines.join("\n"));

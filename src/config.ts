@@ -21,11 +21,23 @@ export interface ModelConfig {
   ignore_invalid_history?: boolean;
 }
 
+export interface AdminAuthConfig {
+  enabled: boolean;
+  username?: string;
+  password?: string;
+}
+
+export interface ApiAuthConfig {
+  enabled: boolean;
+  token?: string;
+}
+
 export interface ServerConfig {
   port: number;
   ttfb_timeout?: number;
   auth?: {
-    token?: string;
+    admin: AdminAuthConfig;
+    api: ApiAuthConfig;
   };
   models: ModelConfig[];
   fallback: Record<string, string[]>;
@@ -35,7 +47,14 @@ export interface ServerConfig {
 }
 
 export interface ParsedConfigDocument {
-  server?: { port?: number; ttfb_timeout?: number; auth?: { token?: string } };
+  server?: {
+    port?: number;
+    ttfb_timeout?: number;
+    auth?: {
+      admin?: { enabled?: boolean; username?: string; password?: string };
+      api?: { enabled?: boolean; token?: string };
+    };
+  };
   record?: { max_size?: number };
   models?: ModelConfig[];
   fallback?: Record<string, string[]>;
@@ -45,7 +64,9 @@ export interface MaterializeConfigOptions {
   port?: number;
   ttfb_timeout?: number;
   recordMaxSize?: number;
-  authToken?: string;
+  adminUsername?: string;
+  adminPassword?: string;
+  apiAuthToken?: string;
 }
 
 export interface ResolvedModelMatch {
@@ -56,6 +77,26 @@ export interface ResolvedModelMatch {
 
 export function getPublicModelNames(config: ServerConfig): string[] {
   return [...Object.keys(config.fallback), ...config.models.map((model) => model.name)];
+}
+
+export function isAuthEnabled(config: ServerConfig, dimension: "admin" | "api"): boolean {
+  const auth = config.auth;
+  if (!auth) return false;
+  if (dimension === "admin") {
+    return !!(auth.admin.enabled && auth.admin.username && auth.admin.password);
+  }
+  return !!(auth.api.enabled && auth.api.token);
+}
+
+export function getAuthToken(config: ServerConfig): string | undefined {
+  const api = config.auth?.api;
+  return api?.enabled ? api?.token : undefined;
+}
+
+export function getAdminCredentials(config: ServerConfig): { username: string; password: string } | undefined {
+  const admin = config.auth?.admin;
+  if (!admin?.enabled || !admin.username || !admin.password) return undefined;
+  return { username: admin.username, password: admin.password };
 }
 
 function resolveEnvVars(value: string): string {
@@ -202,7 +243,26 @@ export function parseSourceConfigDocument(rawText: string): ParsedConfigDocument
 export function materializeConfig(document: ParsedConfigDocument, options?: MaterializeConfigOptions): ServerConfig {
   const defaultTTFBTimeout = options?.ttfb_timeout ?? normalizeTimeout(document.server?.ttfb_timeout, "server.ttfb_timeout") ?? DEFAULT_TTFB_TIMEOUT;
   const recordMaxSize = options?.recordMaxSize ?? (normalizePositiveInteger(document.record?.max_size, "record.max_size") ?? DEFAULT_RECORD_MAX_SIZE);
-  const authToken = normalizeOptionalString(options?.authToken ?? document.server?.auth?.token);
+  const adminEnabled = normalizeBoolean(document.server?.auth?.admin?.enabled, "server.auth.admin.enabled", false);
+  const adminUsername = normalizeOptionalString(options?.adminUsername ?? document.server?.auth?.admin?.username);
+  const adminPassword = normalizeOptionalString(options?.adminPassword ?? document.server?.auth?.admin?.password);
+  const apiEnabled = normalizeBoolean(document.server?.auth?.api?.enabled, "server.auth.api.enabled", false);
+  const apiToken = normalizeOptionalString(options?.apiAuthToken ?? document.server?.auth?.api?.token);
+
+  const auth = (adminEnabled && adminUsername && adminPassword) || (apiEnabled && apiToken)
+    ? {
+        admin: {
+          enabled: !!(adminEnabled && adminUsername && adminPassword),
+          ...(adminUsername ? { username: adminUsername } : {}),
+          ...(adminPassword ? { password: adminPassword } : {}),
+        },
+        api: {
+          enabled: !!(apiEnabled && apiToken),
+          ...(apiToken ? { token: apiToken } : {}),
+        },
+      }
+    : undefined;
+
   const models = (document.models ?? []).map((model) => normalizeModelConfig(model, defaultTTFBTimeout));
   const fallback = document.fallback ?? {};
 
@@ -220,7 +280,7 @@ export function materializeConfig(document: ParsedConfigDocument, options?: Mate
   return {
     port: Number(process.env.PORT) || options?.port || (document.server?.port ?? 3000),
     ...(defaultTTFBTimeout !== undefined ? { ttfb_timeout: defaultTTFBTimeout } : {}),
-    ...(authToken ? { auth: { token: authToken } } : {}),
+    ...(auth ? { auth } : {}),
     models,
     fallback,
     record: {

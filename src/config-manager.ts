@@ -44,14 +44,20 @@ function sameValue(left: unknown, right: unknown): boolean {
 function getRestartFields(intended: ServerConfig, effective: ServerConfig): string[] {
   const fields: string[] = [];
   if (!sameValue(intended.port, effective.port)) fields.push("server.port");
-  if (!sameValue(intended.auth?.token, effective.auth?.token)) fields.push("server.auth.token");
+  if (!sameValue(intended.auth?.admin?.enabled, effective.auth?.admin?.enabled)) fields.push("server.auth.admin.enabled");
+  if (!sameValue(intended.auth?.admin?.username, effective.auth?.admin?.username)) fields.push("server.auth.admin.username");
+  if (!sameValue(intended.auth?.admin?.password, effective.auth?.admin?.password)) fields.push("server.auth.admin.password");
+  if (!sameValue(intended.auth?.api?.enabled, effective.auth?.api?.enabled)) fields.push("server.auth.api.enabled");
+  if (!sameValue(intended.auth?.api?.token, effective.auth?.api?.token)) fields.push("server.auth.api.token");
   return fields;
 }
 
 function materializeHotConfig(document: ParsedConfigDocument, current: ServerConfig): ServerConfig {
   return materializeConfig(document, {
     port: current.port,
-    authToken: current.auth?.token ?? "",
+    adminUsername: current.auth?.admin?.username ?? "",
+    adminPassword: current.auth?.admin?.password ?? "",
+    apiAuthToken: current.auth?.api?.token ?? "",
   });
 }
 

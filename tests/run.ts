@@ -21,8 +21,8 @@ import {
   responsesResponseToAnthropicMessage,
   responsesResponseToChatCompletion,
 } from "../src/converters/index.js";
-import { buildAuthCookieValue, extractBearerToken, isAuthorizedToken, readAuthCookie } from "../src/auth.js";
-import { getPublicModelNames, loadConfig, resolveFallbackModels, resolveModelForRequest } from "../src/config.js";
+import { buildAuthCookieValue, extractBasicCredentials, extractBearerToken, isAuthorizedBasic, isAuthorizedToken, readAuthCookie } from "../src/auth.js";
+import { getAdminCredentials, getAuthToken, getPublicModelNames, isAuthEnabled, loadConfig, resolveFallbackModels, resolveModelForRequest } from "../src/config.js";
 import { renderAdminConfigPage } from "../src/admin-config-page.js";
 import { ConfigManager } from "../src/config-manager.js";
 import { FallbackFailureTracker, FALLBACK_FAILURE_WINDOW_MS, sortFallbackGroupMembers } from "../src/fallback.js";
@@ -126,26 +126,31 @@ function writeTempConfig(yaml: string): string {
   return file;
 }
 
-function buildAuthTestApp(token?: string) {
+function buildAuthTestApp(options?: { adminUsername?: string; adminPassword?: string; apiToken?: string }) {
   const app = new Hono();
-  const authCookieName = "nanollm_auth";
+  type AuthDimension = "admin" | "api" | "none";
+  function getRouteAuthDimension(path: string): AuthDimension {
+    if (path === "/health" || path === "/") return "none";
+    if (path.startsWith("/admin") || path.startsWith("/status") || path.startsWith("/record")) return "admin";
+    if (path.startsWith("/v1/")) return "api";
+    return "none";
+  }
   app.use("*", async (c, next) => {
-    if (c.req.method === "OPTIONS") {
-      return next();
+    if (c.req.method === "OPTIONS") return next();
+    const dimension = getRouteAuthDimension(c.req.path);
+    if (dimension === "none") return next();
+    if (dimension === "admin") {
+      const { adminUsername, adminPassword } = options ?? {};
+      if (!adminUsername || !adminPassword) return next();
+      const candidate = extractBasicCredentials(c.req.header("authorization"));
+      if (isAuthorizedBasic({ username: adminUsername, password: adminPassword }, candidate)) return next();
+      c.header("WWW-Authenticate", 'Basic realm="nanollm admin"');
+      return c.json({ error: "Unauthorized" }, 401);
     }
-    if (c.req.path === "/health") {
-      return next();
-    }
-    if (!token) {
-      return next();
-    }
+    const { apiToken } = options ?? {};
+    if (!apiToken) return next();
     const headerToken = extractBearerToken(c.req.header("authorization"));
-    const queryToken = c.req.query("token") || undefined;
-    const cookieToken = readAuthCookie(c.req.header("cookie"), authCookieName);
-    if (isAuthorizedToken(token, headerToken) || isAuthorizedToken(token, queryToken) || isAuthorizedToken(token, cookieToken)) {
-      c.header("Set-Cookie", `${authCookieName}=${buildAuthCookieValue(token)}; Path=/; HttpOnly; SameSite=Lax`);
-      return next();
-    }
+    if (isAuthorizedToken(apiToken, headerToken)) return next();
     c.header("WWW-Authenticate", "Bearer");
     return c.json({ error: "Unauthorized" }, 401);
   });
@@ -156,6 +161,10 @@ function buildAuthTestApp(token?: string) {
   app.get("/admin", (c) => c.text("admin-page"));
   app.get("/v1/models", (c) => c.json({ object: "list", data: [] }));
   return app;
+}
+
+function basicAuthHeader(username: string, password: string): string {
+  return `Basic ${Buffer.from(`${username}:${password}`).toString("base64")}`;
 }
 
 async function waitForCondition(check: () => boolean, timeoutMs = 3000, intervalMs = 50): Promise<void> {
@@ -3137,7 +3146,13 @@ server:
   port: 3000
   ttfb_timeout: 1500
   auth:
-    token: old-token
+    admin:
+      enabled: true
+      username: admin
+      password: old-pass
+    api:
+      enabled: true
+      token: old-token
 
 record:
   max_size: 10
@@ -3161,7 +3176,13 @@ server:
   port: 4000
   ttfb_timeout: 2600
   auth:
-    token: new-token
+    admin:
+      enabled: true
+      username: admin
+      password: new-pass
+    api:
+      enabled: true
+      token: new-token
 
 record:
   max_size: 25
@@ -3179,9 +3200,10 @@ fallback:
 `, "ui");
 
     assert.deepEqual(result.appliedFields, ["models", "fallback", "server.ttfb_timeout", "record.max_size"]);
-    assert.deepEqual(result.requiresRestartFields, ["server.port", "server.auth.token"]);
+    assert.deepEqual(result.requiresRestartFields, ["server.port", "server.auth.admin.password", "server.auth.api.token"]);
     assert.equal(result.snapshot.effectiveConfig.port, 3000);
-    assert.equal(result.snapshot.effectiveConfig.auth?.token, "old-token");
+    assert.equal(result.snapshot.effectiveConfig.auth?.admin?.password, "old-pass");
+    assert.equal(result.snapshot.effectiveConfig.auth?.api?.token, "old-token");
     assert.equal(result.snapshot.effectiveConfig.ttfb_timeout, 2600);
     assert.equal(result.snapshot.effectiveConfig.record.max_size, 25);
     assert.equal(result.snapshot.effectiveConfig.models[0].name, "beta");
@@ -3245,7 +3267,7 @@ models:
   }
 });
 
-run("config manager does not hot-apply auth token when enabling it from empty", () => {
+run("config manager does not hot-apply auth credentials when enabling from empty", () => {
   const configPath = writeTempConfig(`
 server:
   port: 3000
@@ -3273,7 +3295,13 @@ server:
   port: 3000
   ttfb_timeout: 1500
   auth:
-    token: new-token
+    admin:
+      enabled: true
+      username: admin
+      password: new-pass
+    api:
+      enabled: true
+      token: new-token
 
 record:
   max_size: 10
@@ -3290,8 +3318,8 @@ fallback:
     - alpha
 `, "ui");
 
-    assert.deepEqual(result.requiresRestartFields, ["server.auth.token"]);
-    assert.equal(result.snapshot.effectiveConfig.auth?.token, undefined);
+    assert.deepEqual(result.requiresRestartFields, ["server.auth.admin.enabled", "server.auth.admin.username", "server.auth.admin.password", "server.auth.api.enabled", "server.auth.api.token"]);
+    assert.equal(result.snapshot.effectiveConfig.auth, undefined);
   } finally {
     manager.dispose();
     rmSync(dirname(configPath), { recursive: true, force: true });
@@ -3340,7 +3368,9 @@ runAsync("config manager watcher applies external file changes", async () => {
 server:
   port: 3000
   auth:
-    token: old-token
+    api:
+      enabled: true
+      token: old-token
 
 record:
   max_size: 10
@@ -3360,7 +3390,9 @@ server:
   port: 3010
   ttfb_timeout: 2200
   auth:
-    token: new-token
+    api:
+      enabled: true
+      token: new-token
 
 record:
   max_size: 6
@@ -3377,11 +3409,11 @@ models:
 
     const snapshot = manager.getActiveSnapshot();
     assert.equal(snapshot.effectiveConfig.port, 3000);
-    assert.equal(snapshot.effectiveConfig.auth?.token, "old-token");
+    assert.equal(snapshot.effectiveConfig.auth?.api?.token, "old-token");
     assert.equal(snapshot.effectiveConfig.ttfb_timeout, 2200);
     assert.equal(snapshot.effectiveConfig.record.max_size, 6);
     assert.equal(snapshot.effectiveConfig.models[0].name, "beta");
-    assert.deepEqual(snapshot.requiresRestartFields, ["server.port", "server.auth.token"]);
+    assert.deepEqual(snapshot.requiresRestartFields, ["server.port", "server.auth.api.token"]);
   } finally {
     manager.dispose();
     rmSync(dirname(configPath), { recursive: true, force: true });
@@ -4140,7 +4172,7 @@ run("http log level only keeps /v1 lifecycle logs at info", () => {
   assert.equal(getHTTPLogLevel("/status"), "debug");
 });
 
-run("auth helpers parse bearer token and compare securely", () => {
+run("auth helpers parse bearer token, basic credentials, and compare securely", () => {
   assert.equal(extractBearerToken("Bearer secret-token"), "secret-token");
   assert.equal(extractBearerToken("bearer secret-token"), "secret-token");
   assert.equal(extractBearerToken("Basic abc"), undefined);
@@ -4153,75 +4185,176 @@ run("auth helpers parse bearer token and compare securely", () => {
   assert.equal(isAuthorizedToken("secret-token", "secret-token"), true);
   assert.equal(isAuthorizedToken("secret-token", "wrong-token"), false);
   assert.equal(isAuthorizedToken("secret-token", "secret-token-2"), false);
+
+  // Basic Auth helpers
+  const encoded = Buffer.from("admin:secret").toString("base64");
+  assert.deepEqual(extractBasicCredentials(`Basic ${encoded}`), { username: "admin", password: "secret" });
+  assert.deepEqual(extractBasicCredentials(`basic ${encoded}`), { username: "admin", password: "secret" });
+  assert.equal(extractBasicCredentials("Bearer token"), undefined);
+  assert.equal(extractBasicCredentials("Basic "), undefined);
+  assert.equal(extractBasicCredentials(undefined), undefined);
+  assert.deepEqual(extractBasicCredentials(`Basic ${Buffer.from("user:pass:with:colons").toString("base64")}`), { username: "user", password: "pass:with:colons" });
+  assert.equal(isAuthorizedBasic(undefined, undefined), true);
+  assert.equal(isAuthorizedBasic({ username: "admin", password: "secret" }, { username: "admin", password: "secret" }), true);
+  assert.equal(isAuthorizedBasic({ username: "admin", password: "secret" }, { username: "admin", password: "wrong" }), false);
+  assert.equal(isAuthorizedBasic({ username: "admin", password: "secret" }, undefined), false);
 });
 
-run("config materialization trims empty auth token and keeps non-empty token", () => {
-  const disabled = loadConfig(writeTempConfig(`
+run("config materialization handles dual-dimension auth with enabled flags", () => {
+  // No auth configured
+  const noAuth = loadConfig(writeTempConfig(`
 server:
   port: 3000
-  auth:
-    token: ""
 models: []
 fallback: {}
 `));
-  assert.equal(disabled.auth?.token, undefined);
+  assert.equal(noAuth.auth, undefined);
+  assert.equal(isAuthEnabled(noAuth, "admin"), false);
+  assert.equal(isAuthEnabled(noAuth, "api"), false);
 
-  const enabled = loadConfig(writeTempConfig(`
+  // Admin disabled, API disabled (enabled: false)
+  const allDisabled = loadConfig(writeTempConfig(`
 server:
   port: 3000
   auth:
-    token: "  top-secret  "
+    admin:
+      enabled: false
+      username: admin
+      password: pass
+    api:
+      enabled: false
+      token: tok
 models: []
 fallback: {}
 `));
-  assert.equal(enabled.auth?.token, "top-secret");
+  assert.equal(isAuthEnabled(allDisabled, "admin"), false);
+  assert.equal(isAuthEnabled(allDisabled, "api"), false);
+
+  // Both enabled with trimmed values
+  const bothEnabled = loadConfig(writeTempConfig(`
+server:
+  port: 3000
+  auth:
+    admin:
+      enabled: true
+      username: "  admin  "
+      password: "  secret  "
+    api:
+      enabled: true
+      token: "  top-secret  "
+models: []
+fallback: {}
+`));
+  assert.equal(isAuthEnabled(bothEnabled, "admin"), true);
+  assert.equal(isAuthEnabled(bothEnabled, "api"), true);
+  assert.equal(getAdminCredentials(bothEnabled)?.username, "admin");
+  assert.equal(getAdminCredentials(bothEnabled)?.password, "secret");
+  assert.equal(getAuthToken(bothEnabled), "top-secret");
+
+  // Only admin enabled
+  const adminOnly = loadConfig(writeTempConfig(`
+server:
+  port: 3000
+  auth:
+    admin:
+      enabled: true
+      username: admin
+      password: pass
+    api:
+      enabled: false
+      token: tok
+models: []
+fallback: {}
+`));
+  assert.equal(isAuthEnabled(adminOnly, "admin"), true);
+  assert.equal(isAuthEnabled(adminOnly, "api"), false);
+  assert.equal(getAuthToken(adminOnly), undefined);
 });
 
-await runAsync("auth middleware leaves routes open when token is not configured", async () => {
+await runAsync("auth middleware leaves all routes open when no auth is configured", async () => {
   const app = buildAuthTestApp();
-  const response = await app.request("http://localhost/v1/models");
-  assert.equal(response.status, 200);
-});
-
-await runAsync("auth middleware rejects unauthenticated requests when token is configured", async () => {
-  const app = buildAuthTestApp("top-secret");
-  for (const path of ["/v1/models", "/admin", "/status", "/record", "/record/abcdef/replay"]) {
+  for (const path of ["/v1/models", "/admin", "/status", "/record"]) {
     const response = await app.request("http://localhost" + path);
-    assert.equal(response.status, 401);
-    assert.equal(response.headers.get("www-authenticate"), "Bearer");
-    assert.deepEqual(await response.json(), { error: "Unauthorized" });
+    assert.equal(response.status, 200);
   }
-
+  const replayResponse = await app.request("http://localhost/record/abcdef/replay", { method: "POST" });
+  assert.equal(replayResponse.status, 200);
   const healthResponse = await app.request("http://localhost/health");
   assert.equal(healthResponse.status, 200);
-  assert.deepEqual(await healthResponse.json(), { ok: true });
 });
 
-await runAsync("auth middleware accepts bearer header, query token, and options preflight", async () => {
-  const app = buildAuthTestApp("top-secret");
+await runAsync("auth middleware rejects unauthenticated admin requests with Basic challenge", async () => {
+  const app = buildAuthTestApp({ adminUsername: "admin", adminPassword: "secret" });
+  for (const path of ["/admin", "/status", "/record"]) {
+    const response = await app.request("http://localhost" + path);
+    assert.equal(response.status, 401);
+    assert.match(response.headers.get("www-authenticate") ?? "", /Basic/);
+    assert.deepEqual(await response.json(), { error: "Unauthorized" });
+  }
+  // Replay also requires admin auth
+  const replayResponse = await app.request("http://localhost/record/abcdef/replay", { method: "POST" });
+  assert.equal(replayResponse.status, 401);
+  assert.match(replayResponse.headers.get("www-authenticate") ?? "", /Basic/);
+  // API routes should still be open (no API auth configured)
+  const apiResponse = await app.request("http://localhost/v1/models");
+  assert.equal(apiResponse.status, 200);
+});
 
-  const headerResponse = await app.request("http://localhost/v1/models", {
-    headers: { Authorization: "Bearer top-secret" },
+await runAsync("auth middleware rejects unauthenticated API requests with Bearer challenge", async () => {
+  const app = buildAuthTestApp({ apiToken: "api-secret" });
+  const response = await app.request("http://localhost/v1/models");
+  assert.equal(response.status, 401);
+  assert.equal(response.headers.get("www-authenticate"), "Bearer");
+  assert.deepEqual(await response.json(), { error: "Unauthorized" });
+  // Admin routes should still be open (no admin auth configured)
+  const adminResponse = await app.request("http://localhost/admin");
+  assert.equal(adminResponse.status, 200);
+});
+
+await runAsync("auth middleware accepts correct Basic Auth for admin and Bearer for API", async () => {
+  const app = buildAuthTestApp({ adminUsername: "admin", adminPassword: "secret", apiToken: "api-secret" });
+
+  // Admin with correct Basic Auth
+  const adminResponse = await app.request("http://localhost/admin", {
+    headers: { Authorization: basicAuthHeader("admin", "secret") },
   });
-  assert.equal(headerResponse.status, 200);
-  assert.match(headerResponse.headers.get("set-cookie") ?? "", /nanollm_auth=top-secret/);
+  assert.equal(adminResponse.status, 200);
 
-  const queryResponse = await app.request("http://localhost/admin?token=top-secret");
-  assert.equal(queryResponse.status, 200);
-  assert.match(queryResponse.headers.get("set-cookie") ?? "", /nanollm_auth=top-secret/);
-
-  const cookieResponse = await app.request("http://localhost/status", {
-    headers: { Cookie: "nanollm_auth=top-secret" },
+  // Admin with wrong Basic Auth
+  const wrongAdminResponse = await app.request("http://localhost/admin", {
+    headers: { Authorization: basicAuthHeader("admin", "wrong") },
   });
-  assert.equal(cookieResponse.status, 200);
+  assert.equal(wrongAdminResponse.status, 401);
 
-  const replayResponse = await app.request("http://localhost/record/abcdef/replay", {
-    method: "POST",
-    headers: { Cookie: "nanollm_auth=top-secret" },
+  // API with correct Bearer
+  const apiResponse = await app.request("http://localhost/v1/models", {
+    headers: { Authorization: "Bearer api-secret" },
   });
-  assert.equal(replayResponse.status, 200);
-  assert.deepEqual(await replayResponse.json(), { ok: true, requestId: "abcdef" });
+  assert.equal(apiResponse.status, 200);
 
+  // API with wrong Bearer
+  const wrongApiResponse = await app.request("http://localhost/v1/models", {
+    headers: { Authorization: "Bearer wrong-secret" },
+  });
+  assert.equal(wrongApiResponse.status, 401);
+
+  // Cross-dimension isolation: Basic Auth on admin should NOT work on API
+  const crossApiResponse = await app.request("http://localhost/v1/models", {
+    headers: { Authorization: basicAuthHeader("admin", "secret") },
+  });
+  assert.equal(crossApiResponse.status, 401);
+
+  // Cross-dimension isolation: Bearer on API should NOT work on admin
+  const crossAdminResponse = await app.request("http://localhost/admin", {
+    headers: { Authorization: "Bearer api-secret" },
+  });
+  assert.equal(crossAdminResponse.status, 401);
+
+  // Health always open
+  const healthResponse = await app.request("http://localhost/health");
+  assert.equal(healthResponse.status, 200);
+
+  // OPTIONS preflight always open
   const optionsResponse = await app.request("http://localhost/v1/models", { method: "OPTIONS" });
   assert.notEqual(optionsResponse.status, 401);
 });
