@@ -8,17 +8,21 @@
   },
   "files": [
     "dist",
+    "frontend/dist",
     "README.md"
   ],
   "scripts": {
-    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.dist.json",
-    "prepack": "npm run build",
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:ui\"",
+    "dev:backend": "tsx --watch server.ts",
+    "dev:ui": "npm run dev --prefix frontend",
+    "build": "npm run build:backend && npm run build:ui",
+    "build:backend": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.dist.json",
+    "build:ui": "npm run build --prefix frontend",
+    "prepack": "npm run build:backend",
     "start": "tsx server.ts",
     "start:railway": "bash scripts/start-railway.sh",
-    "dev": "tsx --watch server.ts",
-    "dev:ui": "npm run dev --prefix frontend",
-    "build:ui": "npm run build --prefix frontend",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "npm run typecheck:backend && npm run typecheck --prefix frontend",
+    "typecheck:backend": "tsc --noEmit",
     "test": "tsc -p tsconfig.build.json && node .test-dist/tests/run.js",
     "converter:test": "tsc -p tsconfig.build.json && node .test-dist/src/converters/test.js"
   },
@@ -43,6 +47,7 @@
   },
   "devDependencies": {
     "@types/node": "^25.5.0",
+    "concurrently": "^9.2.1",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3"
   }

@@ -19,7 +19,11 @@ import { FallbackFailureTracker, sortFallbackGroupMembers } from "./src/fallback
 import { SqliteStatusStore, StatusStore, type StatusStoreLike } from "./src/status.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const FRONTEND_DIST = join(__dirname, "frontend", "dist");
+const FRONTEND_DIST = (() => {
+  const direct = join(__dirname, "frontend", "dist");
+  if (existsSync(direct)) return direct;
+  return join(__dirname, "..", "frontend", "dist");
+})();
 import { getHTTPLogLevel, shouldEmitLog } from "./src/http-log.js";
 import {
   normalizeOpenAIChatRequest,
@@ -1312,7 +1316,7 @@ const serveFrontendFile = (c: Context, relPath: string) => {
 app.get("/admin", (c) => {
   const r = serveFrontendFile(c, "index.html");
   if (r) return r;
-  return c.text("Frontend not built. Run: npm run build --prefix frontend", 503);
+  return c.text("Frontend not built. Run: npm run build", 503);
 });
 
 app.get("/admin/assets/:filename{.+}", (c) => {
