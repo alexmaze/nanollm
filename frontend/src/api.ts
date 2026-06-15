@@ -54,6 +54,11 @@ export interface ConfigSnapshot {
   lastError?: { message: string; source: string } | null;
 }
 
+export interface AdminAuthForm {
+  admin: { enabled: string; username: string; password: string };
+  api: { enabled: string; token: string };
+}
+
 export interface AdminConfigForm {
   rootExtras?: Record<string, unknown>;
   serverExtras?: Record<string, unknown>;
@@ -137,6 +142,13 @@ export interface RecentRecordItem {
   createdAt: number;
 }
 
+export interface TestModelResult {
+  ok: boolean;
+  status?: number;
+  ttfbMs?: number;
+  error?: string;
+}
+
 export interface RecordDetail {
   requestId: string;
   key: string;
@@ -181,5 +193,9 @@ export const api = {
 
   replayRecord(requestId: string): Promise<{ requestId: string; summary: RecordSummary; status: number; error?: string }> {
     return postJSON(`/record/${encodeURIComponent(requestId)}/replay`);
+  },
+
+  testModel(name: string): Promise<TestModelResult> {
+    return postJSON<TestModelResult>("/admin/models/test", { name });
   },
 };

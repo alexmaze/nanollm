@@ -627,3 +627,116 @@ export async function forwardStreamRequest(
   const validatedBody = await validateStreamContent(response.body, { attemptIndex: options?.attemptIndex ?? 0 });
   return { body: validatedBody, upstreamFormat: config.provider, timing };
 }
+
+// ─── Test upstream connectivity ──────────────────────────────────────────────
+
+export interface TestUpstreamResult {
+  ok: boolean;
+  status?: number;
+  ttfbMs?: number;
+  error?: string;
+}
+
+const TEST_TIMEOUT_MS = 10_000;
+
+function buildTestRequestBody(config: ModelConfig): { url: string; body: string; method: string } {
+  const base = config.base_url.replace(/\/+$/, "");
+  switch (config.provider) {
+    case "openai-chat":
+      return {
+        url: `${base}/chat/completions`,
+        method: "POST",
+        body: JSON.stringify({
+          model: config.model,
+          messages: [{ role: "user", content: "hi" }],
+          max_tokens: 1,
+          stream: false,
+        }),
+      };
+    case "openai-responses":
+      return {
+        url: `${base}/responses`,
+        method: "POST",
+        body: JSON.stringify({
+          model: config.model,
+          input: "hi",
+          max_output_tokens: 1,
+          stream: false,
+        }),
+      };
+    case "anthropic":
+      return {
+        url: `${base}/messages`,
+        method: "POST",
+        body: JSON.stringify({
+          model: config.model,
+          messages: [{ role: "user", content: "hi" }],
+          max_tokens: 1,
+          stream: false,
+        }),
+      };
+    case "openai-image":
+      // Use the lightweight /models endpoint for image providers to avoid
+      // actually generating an image (which would be slow and costly).
+      return {
+        url: `${base}/models`,
+        method: "GET",
+        body: "",
+      };
+    default:
+      throw new Error(`Unknown provider: ${config.provider}`);
+  }
+}
+
+export async function testUpstream(config: ModelConfig): Promise<TestUpstreamResult> {
+  const { url, method, body } = buildTestRequestBody(config);
+  const proxyUrl = resolveProxyUrl(config);
+  const abortController = new AbortController();
+  const timeoutHandle = setTimeout(() => {
+    abortController.abort(new Error(`Test timeout after ${TEST_TIMEOUT_MS}ms`));
+  }, TEST_TIMEOUT_MS);
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...getAuthHeaders(config),
+    ...(config.headers ?? {}),
+  };
+
+  const fetchOptions: RequestInit = {
+    method,
+    headers,
+    ...(body ? { body } : {}),
+    signal: abortController.signal,
+  };
+
+  if (proxyUrl) {
+    fetchOptions.dispatcher = new ProxyAgent(proxyUrl);
+  }
+
+  const startedAt = Date.now();
+  try {
+    const res = await undiciFetch(url, fetchOptions);
+    const ttfbMs = Date.now() - startedAt;
+
+    // For GET /models (openai-image), any 2xx means the API is reachable.
+    // For POST requests, we accept any response (even errors like 400 from
+    // the model) as "reachable" — the goal is to verify connectivity, not
+    // that the model can actually generate a response with max_tokens=1.
+    if (res.status < 500) {
+      // Consume the body to avoid leaking the connection.
+      await res.text();
+      return { ok: true, status: res.status, ttfbMs };
+    }
+
+    // 5xx means the upstream server itself is having issues.
+    const text = await res.text();
+    return { ok: false, status: res.status, ttfbMs, error: `HTTP ${res.status}: ${text.slice(0, 500)}` };
+  } catch (error) {
+    if (abortController.signal.aborted) {
+      return { ok: false, error: `Timeout after ${TEST_TIMEOUT_MS}ms` };
+    }
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
+  } finally {
+    clearTimeout(timeoutHandle);
+  }
+}

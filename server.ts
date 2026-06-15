@@ -13,7 +13,7 @@ import type { ModelConfig, ServerConfig } from "./src/config.js";
 import { extractBasicCredentials, extractBearerToken, isAuthorizedBasic, isAuthorizedToken } from "./src/auth.js";
 import { getAdminCredentials, getAuthToken, getPublicModelNames, isAuthEnabled, parseConfigText, parseSourceConfigDocument, resolveFallbackModels, resolveModel, resolveModelForRequest } from "./src/config.js";
 import { ConfigManager } from "./src/config-manager.js";
-import { getUpstreamURL } from "./src/proxy.js";
+import { getUpstreamURL, testUpstream } from "./src/proxy.js";
 import { forwardRequest, forwardStreamRequest, passthroughRawRequest, passthroughRequest, passthroughStreamRequest, type OpenAIImageOperation } from "./src/proxy.js";
 import { FallbackFailureTracker, sortFallbackGroupMembers } from "./src/fallback.js";
 import { SqliteStatusStore, StatusStore, type StatusStoreLike } from "./src/status.js";
@@ -354,14 +354,17 @@ function buildAdminConfigFormFromEffectiveConfig(config: ServerConfig): AdminCon
     record: {
       max_size: toInputString(config.record.max_size),
     },
-    models: config.models.map((model) => ({
-      name: model.name,
-      provider: model.provider,
-      base_url: model.base_url,
-      api_key: model.api_key,
-      model: model.model,
-      extras: {},
-    })),
+    models: config.models.map((model) => {
+      const { name, provider, base_url, api_key, model: modelName, ...extras } = model;
+      return {
+        name,
+        provider,
+        base_url,
+        api_key,
+        model: modelName,
+        extras,
+      };
+    }),
     fallbackGroups: Object.entries(config.fallback).map(([name, members]) => ({
       name,
       members,
@@ -1342,9 +1345,9 @@ app.post("/admin/config/apply", async (c) => {
 
   let yamlText: string;
   try {
-    const currentForm = buildAdminConfigForm(currentSnapshot.rawText);
+    const submittedPort = (body.config as AdminConfigForm)?.server?.port;
     yamlText = buildYamlTextFromAdminForm(body.config as AdminConfigForm, {
-      preservedPort: currentForm.server.port,
+      preservedPort: submittedPort,
     });
     parseConfigText(yamlText);
   } catch (error) {
@@ -1375,6 +1378,28 @@ app.post("/admin/config/apply", async (c) => {
       500,
     );
   }
+});
+
+app.post("/admin/models/test", async (c) => {
+  let body: { name?: unknown };
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json({ error: "Invalid JSON body" }, 400);
+  }
+
+  if (!body.name || typeof body.name !== "string") {
+    return c.json({ error: "Field 'name' must be a non-empty string" }, 400);
+  }
+
+  const config = configManager.getActiveSnapshot().effectiveConfig;
+  const modelConfig = resolveModel(config, body.name);
+  if (!modelConfig) {
+    return c.json({ error: `Model '${body.name}' not found` }, 404);
+  }
+
+  const result = await testUpstream(modelConfig);
+  return c.json(result);
 });
 
 app.get("/v1/models", (c) => {

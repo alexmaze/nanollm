@@ -1,6 +1,47 @@
 import { useState, useCallback, useRef, useEffect } from "react";
-import type { ConfigSnapshot, AdminConfigForm } from "../api";
+import type { ConfigSnapshot, AdminConfigForm, AdminAuthForm } from "../api";
 import { api, ApiError } from "../api";
+
+function emptyAuth(): AdminAuthForm {
+  return {
+    admin: { enabled: "false", username: "", password: "" },
+    api: { enabled: "false", token: "" },
+  };
+}
+
+function authFromServerExtras(serverExtras: Record<string, unknown>): AdminAuthForm {
+  const raw = serverExtras.auth as { admin?: Record<string, unknown>; api?: Record<string, unknown> } | undefined;
+  const admin = raw?.admin ?? {};
+  const apiAuth = raw?.api ?? {};
+  return {
+    admin: {
+      enabled: String(admin.enabled ?? "false"),
+      username: String(admin.username ?? ""),
+      password: String(admin.password ?? ""),
+    },
+    api: {
+      enabled: String(apiAuth.enabled ?? "false"),
+      token: String(apiAuth.token ?? ""),
+    },
+  };
+}
+
+/** Serialise the auth form back into a plain object to merge into serverExtras. */
+function authToServerExtras(auth: AdminAuthForm): Record<string, unknown> {
+  return {
+    auth: {
+      admin: {
+        enabled: auth.admin.enabled === "true",
+        ...(auth.admin.username ? { username: auth.admin.username } : {}),
+        ...(auth.admin.password ? { password: auth.admin.password } : {}),
+      },
+      api: {
+        enabled: auth.api.enabled === "true",
+        ...(auth.api.token ? { token: auth.api.token } : {}),
+      },
+    },
+  };
+}
 
 interface HydratedModel {
   _id: string;
@@ -28,7 +69,7 @@ export interface HydratedForm {
   rootExtras: Record<string, unknown>;
   serverExtras: Record<string, unknown>;
   recordExtras: Record<string, unknown>;
-  server: { ttfb_timeout: string };
+  server: { port: string; ttfb_timeout: string; auth: AdminAuthForm };
   record: { max_size: string };
   models: HydratedModel[];
   fallbackGroups: HydratedGroup[];
@@ -45,18 +86,34 @@ function clone<T>(v: T): T {
 }
 
 function hydrateForm(form: AdminConfigForm): HydratedForm {
+  const rawServerExtras = (form.serverExtras || {}) as Record<string, unknown>;
+  // Strip `auth` from serverExtras — it's surfaced as typed form fields. The
+  // remaining serverExtras are round-tripped untouched.
+  const serverExtras: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(rawServerExtras)) {
+    if (k !== "auth") serverExtras[k] = v;
+  }
   return {
     rootExtras: (form.rootExtras || {}) as Record<string, unknown>,
-    serverExtras: (form.serverExtras || {}) as Record<string, unknown>,
+    serverExtras,
     recordExtras: (form.recordExtras || {}) as Record<string, unknown>,
-    server: { ttfb_timeout: String(form.server?.ttfb_timeout ?? "") },
+    server: {
+      port: String(form.server?.port ?? ""),
+      ttfb_timeout: String(form.server?.ttfb_timeout ?? ""),
+      auth: authFromServerExtras(rawServerExtras),
+    },
     record: { max_size: String(form.record?.max_size ?? "") },
-    models: (form.models || []).map((m) => ({
-      ...m,
-      _id: nextId("m"),
-      _expanded: false,
-      extras: (m.extras || {}) as Record<string, unknown>,
-    })),
+    models: (form.models || []).map((m) => {
+      const extras = (m.extras || {}) as Record<string, unknown>;
+      // Pull known extras into typed fields but keep them also in `extras` so
+      // the existing round-trip logic keeps working; we just surface copies here.
+      return {
+        ...m,
+        _id: nextId("m"),
+        _expanded: false,
+        extras,
+      };
+    }),
     fallbackGroups: (form.fallbackGroups || []).map((g) => ({
       _id: nextId("fg"),
       name: g.name,
@@ -65,14 +122,33 @@ function hydrateForm(form: AdminConfigForm): HydratedForm {
   };
 }
 
+/** Try to parse a string value as JSON; return the parsed object or the original. */
+function tryParseJson(value: unknown): unknown {
+  if (typeof value === "string" && value.trim()) {
+    try {
+      const parsed = JSON.parse(value);
+      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+    } catch { /* not valid JSON — keep as string */ }
+  }
+  return value;
+}
+
 function dehydrateForm(form: HydratedForm): AdminConfigForm {
   return {
     rootExtras: form.rootExtras || {},
-    serverExtras: form.serverExtras || {},
+    serverExtras: { ...form.serverExtras, ...authToServerExtras(form.server.auth) },
     recordExtras: form.recordExtras || {},
-    server: { ttfb_timeout: form.server.ttfb_timeout },
+    server: { port: form.server.port, ttfb_timeout: form.server.ttfb_timeout },
     record: { max_size: form.record.max_size },
-    models: form.models.map(({ _id, _expanded, ...m }) => ({ ...m, extras: m.extras || {} })),
+    models: form.models.map(({ _id, _expanded, ...m }) => {
+      const extras = { ...(m.extras || {}) };
+      // The body field is stored as a string in the form (from CodeEditor);
+      // parse it to a proper object for the backend when valid JSON.
+      if ("body" in extras) {
+        extras.body = tryParseJson(extras.body);
+      }
+      return { ...m, extras };
+    }),
     fallbackGroups: form.fallbackGroups.map(({ _id, name, members }) => ({
       name,
       members: members.map((m) => m.value),
