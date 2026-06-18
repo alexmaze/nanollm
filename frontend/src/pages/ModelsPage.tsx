@@ -78,7 +78,7 @@ export default function ModelsPage() {
       ) : (
         <Flex direction="column" gap="3">
           {form.models.map((_, i) => (
-            <ModelCard key={_.name ? `model-${_.name}-${i}` : `model-${i}`} index={i} statusData={statusData} />
+            <ModelCard key={_._id} index={i} statusData={statusData} />
           ))}
         </Flex>
       )}

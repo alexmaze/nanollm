@@ -1,7 +1,8 @@
-import { useState } from "react";
-import { Flex, Button, Text } from "@radix-ui/themes";
+import { useState, useMemo, type ReactNode } from "react";
+import { Flex, Button, Text, Box } from "@radix-ui/themes";
+import { ChevronDownIcon, ChevronRightIcon } from "@radix-ui/react-icons";
 import { useT } from "../i18n";
-import JsonTree from "./JsonTree";
+import ReadonlyEditor from "./ReadonlyEditor";
 
 interface SSEEvent {
   event?: string;
@@ -116,49 +117,87 @@ export default function StreamEvents({ text }: { text: string }) {
 
   const reconstructed = reconstructResponse(events);
   const visibleEvents = showAll ? events : events.slice(0, VISIBLE_LIMIT);
+  const reconstructedText = reconstructed ? JSON.stringify(reconstructed, null, 2) : "";
 
   return (
     <Flex direction="column" gap="2">
       {reconstructed && (
-        <details style={{ border: "1px solid var(--gray-4)", borderRadius: "var(--radius-3)", background: "var(--gray-1)" }}>
-          <summary style={{ padding: "8px 12px", cursor: "pointer", fontWeight: 700, color: "var(--accent-9)", display: "flex", justifyContent: "space-between", listStyle: "none" }}>
-            <span>{t("recordDetail.fullResponse")}</span>
-          </summary>
-          <div style={{ padding: "0 12px 12px" }}>
-            <JsonTree value={reconstructed} />
-          </div>
-        </details>
+        <CollapsibleBox title={t("recordDetail.fullResponse")} defaultOpen={false}>
+          <ReadonlyEditor value={reconstructedText} language="json" />
+        </CollapsibleBox>
       )}
 
-      <details style={{ border: "1px solid var(--gray-4)", borderRadius: "var(--radius-3)", background: "var(--gray-1)" }} open>
-        <summary style={{ padding: "8px 12px", cursor: "pointer", fontWeight: 700, color: "var(--accent-9)", display: "flex", justifyContent: "space-between", listStyle: "none" }}>
-          <span>{t("recordDetail.streamEvents", { count: events.length })}</span>
-        </summary>
-        <div style={{ padding: "0 12px 12px" }}>
-          <Flex direction="column" gap="2">
-            {visibleEvents.map((e, i) => (
-              <details key={i} style={{ border: "1px solid var(--gray-4)", borderRadius: "var(--radius-3)", background: "var(--gray-1)" }}>
-                <summary style={{ padding: "8px 12px", cursor: "pointer", fontWeight: 700, color: "var(--accent-9)", display: "flex", justifyContent: "space-between", listStyle: "none" }}>
-                  <span>#{i + 1} {e.event || "data"}</span>
-                </summary>
-                <div style={{ padding: "0 12px 12px" }}>
-                  {e.event && (
-                    <Text size="1" color="gray" style={{ display: "block", marginBottom: 8 }}>
-                      event: {e.event}
-                    </Text>
-                  )}
-                  <JsonTree value={e.parsed ?? e.data} />
-                </div>
-              </details>
-            ))}
-            {events.length > VISIBLE_LIMIT && !showAll && (
-              <Button variant="outline" size="1" onClick={() => setShowAll(true)}>
-                {t("records.showAllEvents", { count: events.length })}
-              </Button>
-            )}
-          </Flex>
-        </div>
-      </details>
+      <CollapsibleBox title={t("recordDetail.streamEvents", { count: events.length })} defaultOpen>
+        <Flex direction="column" gap="2">
+          {visibleEvents.map((e, i) => (
+            <EventItem key={i} index={i} event={e} />
+          ))}
+          {events.length > VISIBLE_LIMIT && !showAll && (
+            <Button variant="outline" size="1" onClick={() => setShowAll(true)}>
+              {t("records.showAllEvents", { count: events.length })}
+            </Button>
+          )}
+        </Flex>
+      </CollapsibleBox>
     </Flex>
+  );
+}
+
+function CollapsibleBox({ title, defaultOpen, children }: { title: ReactNode; defaultOpen?: boolean; children: ReactNode }) {
+  const [open, setOpen] = useState(!!defaultOpen);
+  return (
+    <Box style={{ border: "1px solid var(--gray-4)", borderRadius: "var(--radius-3)", background: "var(--gray-1)" }}>
+      <Flex
+        align="center"
+        justify="between"
+        px="3"
+        py="2"
+        style={{ cursor: "pointer", userSelect: "none" }}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <Text size="1" weight="bold" color="gray">
+          {title}
+        </Text>
+        {open ? <ChevronDownIcon /> : <ChevronRightIcon />}
+      </Flex>
+      {open && <Box px="3" pb="3">{children}</Box>}
+    </Box>
+  );
+}
+
+function EventItem({ index, event }: { index: number; event: SSEEvent }) {
+  const [open, setOpen] = useState(false);
+  const text = useMemo(() => {
+    if (event.parsed != null) return JSON.stringify(event.parsed, null, 2);
+    return event.data;
+  }, [event]);
+  const language: "json" | "plaintext" = event.parsed != null ? "json" : "plaintext";
+
+  return (
+    <Box style={{ border: "1px solid var(--gray-4)", borderRadius: "var(--radius-3)", background: "var(--gray-1)" }}>
+      <Flex
+        align="center"
+        justify="between"
+        px="3"
+        py="2"
+        style={{ cursor: "pointer", userSelect: "none" }}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <Text size="1" weight="bold" color="gray">
+          #{index + 1} {event.event || "data"}
+        </Text>
+        {open ? <ChevronDownIcon width="14" height="14" /> : <ChevronRightIcon width="14" height="14" />}
+      </Flex>
+      {open && (
+        <Box px="3" pb="3">
+          {event.event && (
+            <Text size="1" color="gray" as="p" mb="1">
+              event: {event.event}
+            </Text>
+          )}
+          <ReadonlyEditor value={text} language={language} maxHeight={280} />
+        </Box>
+      )}
+    </Box>
   );
 }

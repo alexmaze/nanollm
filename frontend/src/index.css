@@ -293,3 +293,76 @@ details[open] > summary {
   margin-right: 6px;
   vertical-align: middle;
 }
+
+/* ============================================================
+   Request records: master-detail split layout
+   ============================================================ */
+.records-split {
+  display: grid;
+  grid-template-columns: 340px minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.records-list-col,
+.records-detail-col {
+  min-width: 0;
+}
+
+.records-list-scroll {
+  max-height: calc(100vh - 220px);
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.records-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: var(--radius-3);
+  border: 1px solid transparent;
+  background-color: transparent;
+  cursor: pointer;
+  transition: background-color var(--app-transition-fast),
+    border-color var(--app-transition-fast);
+}
+
+.records-item:hover {
+  background-color: var(--gray-3);
+}
+
+.records-item[data-active="true"] {
+  background-color: var(--accent-3);
+  border-color: var(--accent-6);
+}
+
+.records-item[data-active="true"]:hover {
+  background-color: var(--accent-4);
+}
+
+.records-sticky-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.records-back-btn {
+  display: none;
+}
+
+@media (max-width: 880px) {
+  .records-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .records-list-col[data-hidden="true"],
+  .records-detail-col[data-hidden="true"] {
+    display: none;
+  }
+  .records-list-scroll {
+    max-height: 320px;
+  }
+  .records-back-btn {
+    display: inline-flex;
+  }
+}
