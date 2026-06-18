@@ -45,7 +45,6 @@ function authToServerExtras(auth: AdminAuthForm): Record<string, unknown> {
 
 interface HydratedModel {
   _id: string;
-  _expanded: boolean;
   name: string;
   provider: string;
   base_url: string;
@@ -110,7 +109,6 @@ function hydrateForm(form: AdminConfigForm): HydratedForm {
       return {
         ...m,
         _id: nextId("m"),
-        _expanded: false,
         extras,
       };
     }),
@@ -140,7 +138,7 @@ function dehydrateForm(form: HydratedForm): AdminConfigForm {
     recordExtras: form.recordExtras || {},
     server: { port: form.server.port, ttfb_timeout: form.server.ttfb_timeout },
     record: { max_size: form.record.max_size },
-    models: form.models.map(({ _id, _expanded, ...m }) => {
+    models: form.models.map(({ _id, ...m }) => {
       const extras = { ...(m.extras || {}) };
       // The body field is stored as a string in the form (from CodeEditor);
       // parse it to a proper object for the backend when valid JSON.
