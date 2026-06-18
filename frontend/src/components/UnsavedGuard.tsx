@@ -29,7 +29,7 @@ export function useGuardedNavigate() {
  * useConfig.
  */
 export default function UnsavedGuard({ children }: { children: ReactNode }) {
-  const { dirty } = useConfigContext();
+  const { dirty, resetConfig } = useConfigContext();
   const { t } = useT();
   const navigate = useNavigate();
   const location = useLocation();
@@ -51,8 +51,9 @@ export default function UnsavedGuard({ children }: { children: ReactNode }) {
   const proceed = useCallback(() => {
     const to = pending;
     setPending(null);
+    resetConfig();
     if (to) navigate(to);
-  }, [pending, navigate]);
+  }, [pending, navigate, resetConfig]);
 
   return (
     <GuardContext.Provider value={{ guardedNavigate }}>
