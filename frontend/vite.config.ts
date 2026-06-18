@@ -11,6 +11,7 @@ export default defineConfig({
       "/status": "http://localhost:8080",
       "/record": "http://localhost:8080",
       "/health": "http://localhost:8080",
+      "/v1": "http://localhost:8080",
     },
   },
   build: {

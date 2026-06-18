@@ -1133,7 +1133,7 @@ app.get("/admin", (c) => {
     const r = serveFrontendFile(c, "index.html");
     if (r)
         return r;
-    return c.text("Frontend not built. Run: npm run build --prefix frontend", 503);
+    return c.text("Frontend not built. Run: npm run build", 503);
 });
 app.get("/admin/assets/:filename{.+}", (c) => {
     const filename = c.req.param("filename");

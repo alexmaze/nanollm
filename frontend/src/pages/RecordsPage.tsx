@@ -16,6 +16,7 @@ function getSourceLabel(s: string | undefined, t: (k: string) => string): string
     claudecode: "source.claudecode",
     codex: "source.codex",
     opencode: "source.opencode",
+    playground: "source.playground",
   };
   const key = s && map[s] ? map[s] : "source.other";
   return t(key);

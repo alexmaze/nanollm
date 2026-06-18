@@ -12,6 +12,7 @@ import EndpointsPage from "./pages/EndpointsPage";
 import SettingsPage from "./pages/SettingsPage";
 import RecordsPage from "./pages/RecordsPage";
 import StatusPage from "./pages/StatusPage";
+import PlaygroundPage from "./pages/PlaygroundPage";
 
 export default function App() {
   return (
@@ -31,6 +32,7 @@ export default function App() {
                     <Route path="/settings" element={<SettingsPage />} />
                     <Route path="/records" element={<RecordsPage />} />
                     <Route path="/status" element={<StatusPage />} />
+                    <Route path="/playground" element={<PlaygroundPage />} />
                   </Route>
                 </Routes>
               </UnsavedGuard>

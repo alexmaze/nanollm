@@ -11,6 +11,20 @@ function extractRequestModel(body) {
 function classifyRequestSource(headers) {
     if (!headers)
         return "other";
+    // The custom header takes precedence over the User-Agent so the admin
+    // playground (browser) can be recognized even though browsers forbid
+    // overriding the User-Agent header.
+    const getSourceHeader = (hdrs) => {
+        if (typeof hdrs.get === "function") {
+            const v = hdrs.get("x-nanollm-source");
+            return v ?? null;
+        }
+        const entry = Object.entries(hdrs).find(([key]) => key.toLowerCase() === "x-nanollm-source");
+        return entry ? entry[1] : null;
+    };
+    const sourceHeader = getSourceHeader(headers);
+    if (sourceHeader && sourceHeader.toLowerCase() === "playground")
+        return "playground";
     const userAgent = typeof headers.get === "function"
         ? headers.get("user-agent")
         : Object.entries(headers).find(([key]) => key.toLowerCase() === "user-agent")?.[1];

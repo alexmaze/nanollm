@@ -30,7 +30,7 @@ export interface RecordedAttempt {
   };
 }
 
-export type RequestSource = "claudecode" | "codex" | "opencode" | "other";
+export type RequestSource = "claudecode" | "codex" | "opencode" | "playground" | "other";
 export type RequestStatus = "in_progress" | "success" | "failure";
 
 export interface RecordEntry {
@@ -119,6 +119,19 @@ function extractRequestModel(body: unknown): string | undefined {
 
 function classifyRequestSource(headers: Headers | Record<string, string> | undefined): RequestSource {
   if (!headers) return "other";
+  // The custom header takes precedence over the User-Agent so the admin
+  // playground (browser) can be recognized even though browsers forbid
+  // overriding the User-Agent header.
+  const getSourceHeader = (hdrs: Headers | Record<string, string>): string | null => {
+    if (typeof (hdrs as Headers).get === "function") {
+      const v = (hdrs as Headers).get("x-nanollm-source");
+      return v ?? null;
+    }
+    const entry = Object.entries(hdrs as Record<string, string>).find(([key]) => key.toLowerCase() === "x-nanollm-source");
+    return entry ? entry[1] : null;
+  };
+  const sourceHeader = getSourceHeader(headers);
+  if (sourceHeader && sourceHeader.toLowerCase() === "playground") return "playground";
   const userAgent = typeof (headers as Headers).get === "function"
     ? (headers as Headers).get("user-agent")
     : Object.entries(headers).find(([key]) => key.toLowerCase() === "user-agent")?.[1];

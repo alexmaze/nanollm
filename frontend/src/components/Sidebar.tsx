@@ -1,6 +1,6 @@
 import { useLocation } from "react-router-dom";
 import { Flex, Box, Button, Text, IconButton, Tooltip, Badge } from "@radix-ui/themes";
-import { LayersIcon, StackIcon, Link2Icon, GearIcon, ClockIcon, MoonIcon, SunIcon, GlobeIcon, ActivityLogIcon } from "@radix-ui/react-icons";
+import { LayersIcon, StackIcon, Link2Icon, GearIcon, ClockIcon, MoonIcon, SunIcon, GlobeIcon, ActivityLogIcon, ChatBubbleIcon } from "@radix-ui/react-icons";
 import { useT } from "../i18n";
 import { useAppearance } from "../theme/ThemeProvider";
 import Logo from "./Logo";
@@ -40,6 +40,7 @@ const NAV_GROUPS: NavGroup[] = [
       { view: "settings", label: "nav.settings", icon: <GearIcon /> },
       { view: "records", label: "nav.records", icon: <ClockIcon /> },
       { view: "status", label: "nav.status", icon: <ActivityLogIcon /> },
+      { view: "playground", label: "nav.playground", icon: <ChatBubbleIcon /> },
     ],
   },
 ];

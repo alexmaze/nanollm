@@ -149,6 +149,25 @@ export interface TestModelResult {
   error?: string;
 }
 
+/** Playground (model test) shared types. */
+
+export type PlaygroundApiType = "openai-chat" | "openai-responses" | "anthropic";
+
+export const PLAYGROUND_ENDPOINT_BY_API: Record<PlaygroundApiType, string> = {
+  "openai-chat": "/v1/chat/completions",
+  "openai-responses": "/v1/responses",
+  "anthropic": "/v1/messages",
+};
+
+export const PLAYGROUND_API_LABEL: Record<PlaygroundApiType, string> = {
+  "openai-chat": "OpenAI Chat",
+  "openai-responses": "OpenAI Responses",
+  "anthropic": "Anthropic",
+};
+
+export const PLAYGROUND_REASONING_EFFORTS = ["low", "medium", "high", "max"] as const;
+export type PlaygroundReasoningEffort = (typeof PLAYGROUND_REASONING_EFFORTS)[number] | "";
+
 export interface RecordDetail {
   requestId: string;
   key: string;
