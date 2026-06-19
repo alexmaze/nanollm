@@ -4,9 +4,10 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { createServer as createHttpServer } from "node:http";
 import { Hono } from "hono";
 import type { Context } from "hono";
-import { serve } from "@hono/node-server";
+import { getRequestListener } from "@hono/node-server";
 import { cors } from "hono/cors";
 import { randomUUID } from "node:crypto";
 import type { ModelConfig, ServerConfig } from "./src/config.js";
@@ -19,11 +20,7 @@ import { FallbackFailureTracker, sortFallbackGroupMembers } from "./src/fallback
 import { SqliteStatusStore, StatusStore, type StatusStoreLike } from "./src/status.js";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
-const FRONTEND_DIST = (() => {
-  const direct = join(__dirname, "frontend", "dist");
-  if (existsSync(direct)) return direct;
-  return join(__dirname, "..", "frontend", "dist");
-})();
+const FRONTEND_DIST = join(__dirname, "frontend");
 import { getHTTPLogLevel, shouldEmitLog } from "./src/http-log.js";
 import {
   normalizeOpenAIChatRequest,
@@ -1426,9 +1423,50 @@ app.post("/v1/images/edits", createImageRoute("edits"));
 
 // ─── Start ──────────────────────────────────────────────────────────────────
 
+const isDev = process.env.NODE_ENV !== "production" && !process.argv.includes("--prod");
 const startupConfig = startupSnapshot.effectiveConfig;
-const server = serve({ fetch: app.fetch, port: startupConfig.port }, (info) => {
-  const base = `http://localhost:${info.port}`;
+const honoListener = getRequestListener(app.fetch, { overrideGlobalObjects: false });
+
+const ADMIN_API_PREFIXES = ["/admin/config", "/admin/models/test"];
+function isAdminApi(url: string): boolean {
+  const path = url.split("?")[0];
+  return ADMIN_API_PREFIXES.some((p) => path === p || path.startsWith(p + "/") || path === p);
+}
+
+let viteDevServer: { middlewares: (req: any, res: any) => void; transformIndexHtml: (url: string, html: string) => Promise<string> } | null = null;
+if (isDev) {
+  const { createServer: createViteServer } = await import("vite");
+  viteDevServer = await createViteServer({
+    server: { middlewareMode: true },
+    appType: "custom",
+    root: "frontend",
+    base: "/admin/",
+  });
+}
+
+const server = createHttpServer(async (req, res) => {
+  const url = req.url ?? "";
+  if (viteDevServer && url.startsWith("/admin") && !isAdminApi(url)) {
+    const path = url.split("?")[0];
+    if (path === "/admin" || path === "/admin/") {
+      try {
+        const html = readFileSync(join(__dirname, "frontend", "index.html"), "utf-8");
+        const transformed = await viteDevServer.transformIndexHtml("/admin/", html);
+        res.writeHead(200, { "Content-Type": "text/html" });
+        res.end(transformed);
+      } catch {
+        res.writeHead(500, { "Content-Type": "text/plain" });
+        res.end("Failed to load frontend index.html");
+      }
+      return;
+    }
+    return viteDevServer.middlewares(req, res);
+  }
+  return honoListener(req, res);
+});
+
+server.listen(startupConfig.port, () => {
+  const base = `http://localhost:${startupConfig.port}`;
   const modelCount = startupConfig.models.length;
   const fallbackCount = Object.keys(startupConfig.fallback).length;
   const adminAuthEnabled = isAuthEnabled(startupConfig, "admin");

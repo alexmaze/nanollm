@@ -119,7 +119,7 @@ const zh = {
     tabBasic: "基本",
     tabAdvanced: "高级",
     tabHealth: "健康",
-    searchPlaceholder: "搜索名称 / 模型 / 地址",
+    searchPlaceholder: "名称/模型/地址",
     filterAll: "全部提供商",
     clone: "克隆",
     batchTest: "全部测试",
@@ -182,7 +182,7 @@ const zh = {
   records: {
     heading: "请求记录",
     meta: "在左侧选择请求或输入 requestId 查看详情。",
-    placeholder: "搜索 requestId / key / 路径，回车按 ID 查询",
+    placeholder: "requestId/key/路径",
     query: "查询",
     emptyRequestId: "请先输入 requestId。",
     noRecords: "还没有加载记录。",

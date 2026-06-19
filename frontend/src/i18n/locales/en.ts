@@ -119,7 +119,7 @@ const en = {
     tabBasic: "Basic",
     tabAdvanced: "Advanced",
     tabHealth: "Health",
-    searchPlaceholder: "Search name / model / URL",
+    searchPlaceholder: "name/model/URL",
     filterAll: "All providers",
     clone: "Clone",
     batchTest: "Test All",
@@ -182,7 +182,7 @@ const en = {
   records: {
     heading: "Request Records",
     meta: "Pick a request on the left or enter a requestId to view details.",
-    placeholder: "Search requestId / key / path, press Enter to query by ID",
+    placeholder: "requestId/key/path",
     query: "Query",
     emptyRequestId: "Please enter a requestId.",
     noRecords: "No records loaded yet.",

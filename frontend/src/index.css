@@ -538,8 +538,6 @@ details[open] > summary {
 .playground-drawer {
   width: 400px;
   flex-shrink: 0;
-  background-color: var(--color-background);
-  border-left: 1px solid var(--gray-4);
   padding: 0 20px 20px;
   display: flex;
   flex-direction: column;
@@ -552,8 +550,6 @@ details[open] > summary {
   z-index: 2;
   padding: 16px 0 12px;
   margin-bottom: 4px;
-  background-color: var(--color-background);
-  border-bottom: 1px solid var(--gray-4);
 }
 .playground-drawer-body {
   flex: 1 1 auto;
@@ -580,7 +576,6 @@ details[open] > summary {
   padding: 14px;
   margin-top: 12px;
   border-radius: var(--radius-3);
-  background-color: var(--gray-2);
   border: 1px solid var(--gray-4);
 }
 .playground-drawer-section:first-child {
