@@ -786,6 +786,9 @@ function createRoute(incomingFormat: StreamFormat) {
             return response;
           }
 
+          if (!result.usage) {
+            console.warn(withRequestId(`[WARN] non-streaming response had no usage for model=${modelConfig.name} path=${c.req.path}`));
+          }
           statusStore.recordSuccess(modelConfig.name, Date.now() - requestStartedAt, result.timing.ttfbMs, result.usage, requestStartedAt);
           cacheResponseItems((result.json as any)?.output);
           const response = c.json(result.json);
@@ -1010,6 +1013,9 @@ function buildStreamReadable(
   function settleSuccess(usage?: import("./src/converters/shared.js").NormalizedUsage) {
     if (successRecorded) return;
     successRecorded = true;
+    if (!usage) {
+      console.warn(withRequestId(`[STREAM WARN] stream completed but no usage data was extracted for model=${modelName} path=${path}`));
+    }
     const totalDuration = Date.now() - timing.startedAt; const streamDuration = totalDuration - timing.ttfbMs; statusStore.recordSuccess(modelName, totalDuration, timing.ttfbMs, usage, timing.startedAt, streamDuration);
   }
 
@@ -1131,6 +1137,9 @@ function buildPipeStreamAndCache(
   function settleSuccess(usage?: import("./src/converters/shared.js").NormalizedUsage) {
     if (successRecorded) return;
     successRecorded = true;
+    if (!usage) {
+      console.warn(withRequestId(`[STREAM WARN] stream completed but no usage data was extracted for model=${modelName} path=${path}`));
+    }
     const totalDuration = Date.now() - timing.startedAt; const streamDuration = totalDuration - timing.ttfbMs; statusStore.recordSuccess(modelName, totalDuration, timing.ttfbMs, usage, timing.startedAt, streamDuration);
   }
 

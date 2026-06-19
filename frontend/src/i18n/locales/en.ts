@@ -252,6 +252,7 @@ const en = {
     avgDuration: "Avg Duration",
     input: "Input",
     cache: "Cache",
+    cacheRatio: "Cache%",
     output: "Output",
     avgSpeed: "Avg Speed",
     noData: "No Data",

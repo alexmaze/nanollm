@@ -252,6 +252,7 @@ const zh = {
     avgDuration: "平均总耗时",
     input: "输入",
     cache: "缓存",
+    cacheRatio: "缓存率",
     output: "输出",
     avgSpeed: "平均速度",
     noData: "无数据",

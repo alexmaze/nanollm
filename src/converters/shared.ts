@@ -300,6 +300,8 @@ export function normalizeUsage(usage: Record<string, unknown> | null | undefined
     cacheCreationInputTokens == null &&
     cacheReadInputTokens == null
   ) {
+    const keys = Object.keys(usage).join(", ");
+    console.warn(`[normalizeUsage] Could not extract any token fields from usage object. Keys: {${keys}}`);
     return undefined;
   }
 

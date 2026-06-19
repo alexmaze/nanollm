@@ -67,11 +67,19 @@ export function aggSpeed(agg: HealthAgg): number | null {
 }
 
 export function formatTokenM(v: number): string {
-  if (!Number.isFinite(v) || v <= 0) return "0M";
-  const m = v / 1000000;
-  if (m >= 100) return Math.round(m) + "M";
-  if (m >= 10) return m.toFixed(1) + "M";
-  return m.toFixed(2) + "M";
+  if (!Number.isFinite(v) || v <= 0) return "0";
+  if (v >= 1_000_000) {
+    const m = v / 1_000_000;
+    if (m >= 100) return Math.round(m) + "M";
+    if (m >= 10) return m.toFixed(1) + "M";
+    return m.toFixed(2) + "M";
+  }
+  if (v >= 1_000) {
+    const k = v / 1_000;
+    if (k >= 100) return Math.round(k) + "k";
+    return k.toFixed(1) + "k";
+  }
+  return String(Math.round(v));
 }
 
 export function formatSpeed(v: number | null): string {
@@ -79,4 +87,17 @@ export function formatSpeed(v: number | null): string {
   if (v >= 100) return Math.round(v) + " tok/s";
   if (v >= 10) return v.toFixed(1) + " tok/s";
   return v.toFixed(2) + " tok/s";
+}
+
+/** Cache-hit ratio (0-100) for an aggregate. Returns null when there are no input tokens. */
+export function cacheRatio(agg: HealthAgg): number | null {
+  const total = agg.ni + agg.cr;
+  if (total <= 0) return null;
+  return (agg.cr / total) * 100;
+}
+
+export function formatPercent(v: number | null): string {
+  if (v == null || !Number.isFinite(v)) return "-";
+  if (v >= 10) return Math.round(v) + "%";
+  return v.toFixed(1) + "%";
 }

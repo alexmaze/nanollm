@@ -4,7 +4,7 @@ import { ActivityLogIcon } from "@radix-ui/react-icons";
 import { useT } from "../i18n";
 import { useStatusData } from "../hooks/useStatus";
 import type { HealthCell } from "../api";
-import { getHealthTone, formatTokenM, formatSpeed, TONE_COLORS } from "../components/health";
+import { getHealthTone, formatTokenM, formatSpeed, formatPercent, cacheRatio, TONE_COLORS } from "../components/health";
 import StatCard from "../components/StatCard";
 import ErrorState from "../components/ErrorState";
 import PageSkeleton from "../components/PageSkeleton";
@@ -149,7 +149,7 @@ function StatusContent() {
                         <Table.Cell style={{ paddingRight: 8 }}>
                           <Text weight="bold">{model.name}</Text>
                           <Text size="1" color="gray" as="p">
-                            {t("status.input")} {formatTokenM(agg.ni)} · {t("status.output")} {formatTokenM(agg.ot)} · {formatSpeed(speed)}
+                            {t("status.input")} {formatTokenM(agg.ni)} · {t("status.cache")} {formatTokenM(agg.cr)} ({formatPercent(cacheRatio(agg))}) · {t("status.output")} {formatTokenM(agg.ot)} · {formatSpeed(speed)}
                           </Text>
                         </Table.Cell>
                         {visibleCells.map((cell, ci) => {
