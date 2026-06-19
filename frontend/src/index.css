@@ -526,30 +526,23 @@ details[open] > summary {
 
 /* ============================================================
    Playground chat shell (redesigned)
-   Full-height two-pane: overlay drawer + main chat column.
+   Full-height two-pane: main chat column + inline settings drawer.
    ============================================================ */
 .playground-shell {
   display: flex;
   flex-direction: row;
-  position: relative;
   background-color: var(--gray-2);
 }
 
-/* Drawer (fixed to viewport right edge) */
+/* Drawer (inline flex child, right side) */
 .playground-drawer {
-  position: fixed;
-  right: 0;
-  top: 0;
-  bottom: 0;
   width: 400px;
-  z-index: 20;
-  background-color: var(--color-surface);
-  box-shadow: var(--app-floating-shadow);
+  flex-shrink: 0;
+  background-color: var(--color-background);
   border-left: 1px solid var(--gray-4);
   padding: 0 20px 20px;
   display: flex;
   flex-direction: column;
-  animation: playground-slide-in 220ms cubic-bezier(0.4, 0, 0.2, 1);
   overflow: hidden;
 }
 .playground-drawer-head {
@@ -559,7 +552,7 @@ details[open] > summary {
   z-index: 2;
   padding: 16px 0 12px;
   margin-bottom: 4px;
-  background-color: var(--color-surface);
+  background-color: var(--color-background);
   border-bottom: 1px solid var(--gray-4);
 }
 .playground-drawer-body {
@@ -604,11 +597,6 @@ details[open] > summary {
   border-radius: var(--radius-2);
   background-color: var(--gray-2);
 }
-@keyframes playground-slide-in {
-  from { transform: translateX(100%); }
-  to { transform: translateX(0); }
-}
-
 /* Main chat column */
 .playground-main {
   flex: 1 1 auto;
@@ -756,7 +744,7 @@ details[open] > summary {
 .playground-model-row {
   padding: 10px 12px;
   border-radius: var(--radius-3);
-  background-color: var(--color-surface);
+  background-color: var(--color-background);
   border: 1px solid var(--gray-4);
   transition: border-color var(--app-transition-fast), box-shadow var(--app-transition-fast);
 }
@@ -801,13 +789,45 @@ details[open] > summary {
   white-space: nowrap;
 }
 
-/* Expanded 2x2 param grid */
-.playground-param-grid {
-  row-gap: 10px;
+/* Expanded: sectioned param groups */
+.playground-param-group-title {
+  color: var(--gray-11);
+  white-space: nowrap;
 }
-.playground-param-cell {
-  flex: 1 1 calc(50% - 6px);
-  min-width: 120px;
+
+/* Slider row: label | slider | input | range */
+.playground-param-slider-row {
+  min-height: 28px;
+}
+.playground-param-slider-label {
+  width: 100px;
+  flex-shrink: 0;
+}
+.playground-param-slider {
+  flex: 1 1 auto;
+  min-width: 60px;
+}
+.playground-param-slider-input {
+  width: 56px;
+  flex-shrink: 0;
+}
+.playground-param-slider-input input {
+  text-align: center;
+}
+.playground-param-range-badge {
+  flex-shrink: 0;
+  width: 28px;
+  text-align: right;
+}
+
+/* Non-slider field row: label | control | badge */
+.playground-param-field-label {
+  width: 100px;
+  flex-shrink: 0;
+}
+.playground-param-field-input {
+  flex: 1 1 auto;
+  min-width: 80px;
 }
 
 /* Add-model prominent action button (Select trigger styled as dashed CTA) */
@@ -910,6 +930,9 @@ details[open] > summary {
 
 /* ─── Playground responsive ─────────────────────────────────────────────── */
 @media (max-width: 768px) {
+  .playground-shell--drawer-open .playground-main {
+    display: none;
+  }
   .playground-drawer {
     width: 100%;
   }

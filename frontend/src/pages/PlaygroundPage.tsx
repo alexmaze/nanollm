@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useMemo, useEffect } from "react";
-import { Flex, Box, Button, Heading, Text, TextField, Select, IconButton, Tooltip, Badge, Spinner, TextArea, Separator, Popover } from "@radix-ui/themes";
+import { Flex, Box, Button, Heading, Text, TextField, Select, IconButton, Tooltip, Badge, Spinner, TextArea, Separator, Popover, Slider, SegmentedControl } from "@radix-ui/themes";
 import { ChatBubbleIcon, PlusIcon, Cross2Icon, ImageIcon, ReloadIcon, PaperPlaneIcon, UploadIcon, Link2Icon, GearIcon, ChevronDownIcon, ChevronRightIcon, LightningBoltIcon, TrashIcon } from "@radix-ui/react-icons";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -12,8 +12,10 @@ import { formatSpeed } from "../components/health";
 import {
   PLAYGROUND_API_LABEL,
   PLAYGROUND_REASONING_EFFORTS,
+  PLAYGROUND_ENABLE_THINKING_VALUES,
   type PlaygroundApiType,
   type PlaygroundReasoningEffort,
+  type PlaygroundEnableThinking,
 } from "../api";
 import {
   buildRequestBody,
@@ -32,9 +34,10 @@ interface ModelParams {
   topP: string;
   maxTokens: string;
   reasoningEffort: PlaygroundReasoningEffort;
+  enableThinking: PlaygroundEnableThinking;
 }
 
-const EMPTY_MODEL_PARAMS: ModelParams = { temperature: "", topP: "", maxTokens: "", reasoningEffort: "" };
+const EMPTY_MODEL_PARAMS: ModelParams = { temperature: "", topP: "", maxTokens: "", reasoningEffort: "", enableThinking: "auto" };
 
 interface SelectedModel {
   key: string;
@@ -82,6 +85,7 @@ function paramSummary(p: ModelParams): string {
   if (p.topP.trim()) parts.push(`P${p.topP.trim()}`);
   if (p.maxTokens.trim()) parts.push(`M${p.maxTokens.trim()}`);
   if (p.reasoningEffort) parts.push(`E${p.reasoningEffort}`);
+  if (p.enableThinking !== "auto") parts.push(`Th:${p.enableThinking}`);
   return parts.join(" ");
 }
 
@@ -237,7 +241,7 @@ export default function PlaygroundPage() {
     async (model: SelectedModel, turnId: string, userContent: string, images: PlaygroundImage[], isRetry: boolean, signal: AbortSignal): Promise<void> => {
       const endpoint = endpointForApiType(model.apiType);
       const history = isRetry ? buildHistoryForModel(model.key, turnId) : buildHistoryForModel(model.key, null);
-      const params: PlaygroundParams = { system, temperature: model.params.temperature, topP: model.params.topP, maxTokens: model.params.maxTokens, reasoningEffort: model.params.reasoningEffort };
+      const params: PlaygroundParams = { system, temperature: model.params.temperature, topP: model.params.topP, maxTokens: model.params.maxTokens, reasoningEffort: model.params.reasoningEffort, enableThinking: model.params.enableThinking };
       const body = buildRequestBody(model.apiType, {
         ...params,
         modelName: model.name,
@@ -368,173 +372,12 @@ export default function PlaygroundPage() {
   const canSend = !sending && selectedModels.length > 0 && (input.trim().length > 0 || pendingImages.length > 0);
 
   return (
-    <Box className="playground-shell" style={{ height: "100%", minHeight: 0 }}>
-      {drawerOpen && (
-        <Box className="playground-drawer" role="dialog" aria-label={t("playground.settings")}>
-            <Flex align="center" justify="between" className="playground-drawer-head">
-              <Flex align="center" gap="2">
-                <GearIcon />
-                <Heading size="4" weight="bold">{t("playground.settings")}</Heading>
-              </Flex>
-              <IconButton variant="ghost" size="2" aria-label={t("playground.closeDrawer")} onClick={() => setDrawerOpen(false)}>
-                <Cross2Icon />
-              </IconButton>
-            </Flex>
-
-            <Box className="playground-drawer-body">
-              {/* Global system prompt */}
-              <Box className="playground-drawer-section">
-                <Text as="label" size="2" weight="bold" className="playground-drawer-section-title">{t("playground.systemPromptGlobal")}</Text>
-                <TextArea
-                  mt="2"
-                  placeholder={t("playground.systemPromptPlaceholder")}
-                  value={system}
-                  onChange={(e) => setSystem(e.target.value)}
-                  rows={4}
-                  className="playground-drawer-textarea"
-                />
-                <Flex align="center" justify="between" mt="2">
-                  <Text size="1" color="gray" as="p">{t("playground.systemPromptPlaceholder")}</Text>
-                  <Badge variant="soft" color="gray" size="1">{system.length}</Badge>
-                </Flex>
-              </Box>
-
-              {/* Models list */}
-              <Box className="playground-drawer-section">
-                <Text as="label" size="2" weight="bold" className="playground-drawer-section-title">{t("playground.modelsHeading")}</Text>
-
-                {/* Add model — prominent action at top */}
-                <Box mt="2">
-                  <Select.Root value="" onValueChange={(v) => addModel(v)}>
-                    <Select.Trigger className="playground-add-model-btn" placeholder={t("playground.addModel")} style={{ width: "100%" }}>
-                      <Flex as="span" align="center" gap="2" justify="center">
-                        <PlusIcon />
-                        <Text size="2" weight="medium">{t("playground.addModel")}</Text>
-                      </Flex>
-                    </Select.Trigger>
-                    <Select.Content>
-                      {availableModels.map((m) => (
-                        <Select.Item key={m.name} value={m.name}>{m.name}</Select.Item>
-                      ))}
-                    </Select.Content>
-                  </Select.Root>
-                </Box>
-
-                <Flex direction="column" gap="2" mt="3">
-                  {selectedModels.map((m) => {
-                    const imageFlag = modelImageFlag(m.name);
-                    const expanded = expandedModels.has(m.key);
-                    const chips = paramChips(m.params);
-                    return (
-                      <Box key={m.key} className="playground-model-row">
-                        <Flex direction="column" gap="2">
-                          {/* Clickable header row */}
-                          <Box
-                            className="playground-model-row-head"
-                            role="button"
-                            tabIndex={0}
-                            aria-label={expanded ? t("playground.collapseModel") : t("playground.expandModel")}
-                            onClick={() => toggleModelExpanded(m.key)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter" || e.key === " ") {
-                                e.preventDefault();
-                                toggleModelExpanded(m.key);
-                              }
-                            }}
-                          >
-                            <Flex align="center" gap="2">
-                              <Box className="playground-model-chev">
-                                {expanded ? <ChevronDownIcon /> : <ChevronRightIcon />}
-                              </Box>
-                              <Box style={{ minWidth: 0, flex: 1 }}>
-                                <Text size="2" weight="medium" className="app-truncate" style={{ display: "block" }}>{m.name}</Text>
-                              </Box>
-                              <Badge variant="soft" color={API_TYPE_COLOR[m.apiType]} size="1">{PLAYGROUND_API_LABEL[m.apiType]}</Badge>
-                              {imageFlag === false && (
-                                <Tooltip content={t("playground.imageDegradedTip")}>
-                                  <Badge variant="soft" color="amber" size="1">{t("playground.imageDegraded")}</Badge>
-                                </Tooltip>
-                              )}
-                              <Tooltip content={t("playground.removeModel")}>
-                                <IconButton
-                                  variant="ghost"
-                                  color="red"
-                                  size="1"
-                                  onClick={(e) => { e.stopPropagation(); removeModel(m.key); }}
-                                  aria-label={t("playground.removeModel")}
-                                >
-                                  <TrashIcon />
-                                </IconButton>
-                              </Tooltip>
-                            </Flex>
-                          </Box>
-
-                          {/* Collapsed: param overview chips */}
-                          {!expanded && chips.length > 0 && (
-                            <Flex gap="2" wrap="wrap" pl="5" className="playground-param-chips">
-                              {chips.map((c) => (
-                                <Text key={c.key} as="span" size="1" className="playground-param-chip">{c.text}</Text>
-                              ))}
-                            </Flex>
-                          )}
-
-                          {/* Expanded: API type + 2x2 param grid */}
-                          {expanded && (
-                            <Box className="playground-model-params" pl="5">
-                              <Box mb="2">
-                                <Text as="label" size="1" color="gray" weight="medium">{t("playground.apiType")}</Text>
-                                <Select.Root value={m.apiType} onValueChange={(v) => changeApiType(m.key, v as PlaygroundApiType)}>
-                                  <Select.Trigger mt="1" style={{ width: "100%" }} />
-                                  <Select.Content>
-                                    {(Object.keys(PLAYGROUND_API_LABEL) as PlaygroundApiType[]).map((api) => (
-                                      <Select.Item key={api} value={api}>{PLAYGROUND_API_LABEL[api]}</Select.Item>
-                                    ))}
-                                  </Select.Content>
-                                </Select.Root>
-                              </Box>
-                              <Flex gap="2" wrap="wrap" className="playground-param-grid">
-                                <Box className="playground-param-cell">
-                                  <Text as="label" size="1" color="gray" weight="medium">{t("playground.temperature")}</Text>
-                                  <TextField.Root mt="1" placeholder="0.7" value={m.params.temperature} onChange={(e) => updateModelParams(m.key, { temperature: e.target.value })} />
-                                </Box>
-                                <Box className="playground-param-cell">
-                                  <Text as="label" size="1" color="gray" weight="medium">{t("playground.topP")}</Text>
-                                  <TextField.Root mt="1" placeholder="1.0" value={m.params.topP} onChange={(e) => updateModelParams(m.key, { topP: e.target.value })} />
-                                </Box>
-                                <Box className="playground-param-cell">
-                                  <Text as="label" size="1" color="gray" weight="medium">{t("playground.maxTokens")}</Text>
-                                  <TextField.Root mt="1" placeholder="4096" value={m.params.maxTokens} onChange={(e) => updateModelParams(m.key, { maxTokens: e.target.value })} />
-                                </Box>
-                                <Box className="playground-param-cell">
-                                  <Text as="label" size="1" color="gray" weight="medium">{t("playground.reasoningEffort")}</Text>
-                                  <Select.Root value={m.params.reasoningEffort || "__none__"} onValueChange={(v) => updateModelParams(m.key, { reasoningEffort: v === "__none__" ? "" : (v as PlaygroundReasoningEffort) })}>
-                                    <Select.Trigger mt="1" style={{ width: "100%" }} />
-                                    <Select.Content>
-                                      <Select.Item value="__none__">{t("playground.reasoningEffortNone")}</Select.Item>
-                                      {PLAYGROUND_REASONING_EFFORTS.map((r) => (
-                                        <Select.Item key={r} value={r}>{r}</Select.Item>
-                                      ))}
-                                    </Select.Content>
-                                  </Select.Root>
-                                </Box>
-                              </Flex>
-                              <Text size="1" color="gray" mt="2" as="p">{t("playground.maxTokensHelper")}</Text>
-                            </Box>
-                          )}
-                        </Flex>
-                      </Box>
-                    );
-                  })}
-                </Flex>
-              </Box>
-            </Box>
-        </Box>
-      )}
-
+    <Box className={`playground-shell${drawerOpen ? " playground-shell--drawer-open" : ""}`} style={{ height: "100%", minHeight: 0 }}>
       {/* Main column */}
       <Flex className="playground-main" direction="column" style={{ height: "100%", minHeight: 0 }}>
         <PageHeader title={t("playground.heading")} description={t("playground.meta")}>
           <Flex align="center" gap="2" wrap="wrap">
+            {!drawerOpen && (
             <Flex className="playground-model-strip" align="center" gap="2">
               {selectedModels.map((m) => {
                 const color = colorForName(m.name);
@@ -550,11 +393,14 @@ export default function PlaygroundPage() {
                 );
               })}
             </Flex>
+            )}
+            {!drawerOpen && (
             <Tooltip content={t("playground.openDrawer")}>
               <IconButton variant="soft" size="2" onClick={() => setDrawerOpen(true)} aria-label={t("playground.openDrawer")}>
                 <GearIcon />
               </IconButton>
             </Tooltip>
+            )}
             {sending ? (
               <Button variant="soft" color="red" size="2" onClick={stop}>
                 <span className="playground-stop-icon" />
@@ -676,6 +522,264 @@ export default function PlaygroundPage() {
           </Box>
         </Box>
       </Flex>
+
+      {drawerOpen && (
+        <Box className="playground-drawer" role="dialog" aria-label={t("playground.settings")}>
+            <Flex align="center" justify="between" className="playground-drawer-head">
+              <Flex align="center" gap="2">
+                <GearIcon />
+                <Heading size="4" weight="bold">{t("playground.settings")}</Heading>
+              </Flex>
+              <IconButton variant="ghost" size="2" aria-label={t("playground.closeDrawer")} onClick={() => setDrawerOpen(false)}>
+                <Cross2Icon />
+              </IconButton>
+            </Flex>
+
+            <Box className="playground-drawer-body">
+              {/* Global system prompt */}
+              <Box className="playground-drawer-section">
+                <Text as="label" size="2" weight="bold" className="playground-drawer-section-title">{t("playground.systemPromptGlobal")}</Text>
+                <TextArea
+                  mt="2"
+                  placeholder={t("playground.systemPromptPlaceholder")}
+                  value={system}
+                  onChange={(e) => setSystem(e.target.value)}
+                  rows={4}
+                  className="playground-drawer-textarea"
+                />
+                <Flex align="center" justify="between" mt="2">
+                  <Text size="1" color="gray" as="p">{t("playground.systemPromptPlaceholder")}</Text>
+                  <Badge variant="soft" color="gray" size="1">{system.length}</Badge>
+                </Flex>
+              </Box>
+
+              {/* Models list */}
+              <Box className="playground-drawer-section">
+                <Text as="label" size="2" weight="bold" className="playground-drawer-section-title">{t("playground.modelsHeading")}</Text>
+
+                {/* Add model — prominent action at top */}
+                <Box mt="2">
+                  <Select.Root value="" onValueChange={(v) => addModel(v)}>
+                    <Select.Trigger className="playground-add-model-btn" placeholder={t("playground.addModel")} style={{ width: "100%" }}>
+                      <Flex as="span" align="center" gap="2" justify="center">
+                        <PlusIcon />
+                        <Text size="2" weight="medium">{t("playground.addModel")}</Text>
+                      </Flex>
+                    </Select.Trigger>
+                    <Select.Content>
+                      {availableModels.map((m) => (
+                        <Select.Item key={m.name} value={m.name}>{m.name}</Select.Item>
+                      ))}
+                    </Select.Content>
+                  </Select.Root>
+                </Box>
+
+                <Flex direction="column" gap="2" mt="3">
+                  {selectedModels.map((m) => {
+                    const imageFlag = modelImageFlag(m.name);
+                    const expanded = expandedModels.has(m.key);
+                    const chips = paramChips(m.params);
+                    return (
+                      <Box key={m.key} className="playground-model-row">
+                        <Flex direction="column" gap="2">
+                          {/* Clickable header row */}
+                          <Box
+                            className="playground-model-row-head"
+                            role="button"
+                            tabIndex={0}
+                            aria-label={expanded ? t("playground.collapseModel") : t("playground.expandModel")}
+                            onClick={() => toggleModelExpanded(m.key)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                toggleModelExpanded(m.key);
+                              }
+                            }}
+                          >
+                            <Flex align="center" gap="2">
+                              <Box className="playground-model-chev">
+                                {expanded ? <ChevronDownIcon /> : <ChevronRightIcon />}
+                              </Box>
+                              <Box style={{ minWidth: 0, flex: 1 }}>
+                                <Text size="2" weight="medium" className="app-truncate" style={{ display: "block" }}>{m.name}</Text>
+                              </Box>
+                              <Badge variant="soft" color={API_TYPE_COLOR[m.apiType]} size="1">{PLAYGROUND_API_LABEL[m.apiType]}</Badge>
+                              {imageFlag === false && (
+                                <Tooltip content={t("playground.imageDegradedTip")}>
+                                  <Badge variant="soft" color="amber" size="1">{t("playground.imageDegraded")}</Badge>
+                                </Tooltip>
+                              )}
+                              <Tooltip content={t("playground.removeModel")}>
+                                <IconButton
+                                  variant="ghost"
+                                  color="red"
+                                  size="1"
+                                  onClick={(e) => { e.stopPropagation(); removeModel(m.key); }}
+                                  aria-label={t("playground.removeModel")}
+                                >
+                                  <TrashIcon />
+                                </IconButton>
+                              </Tooltip>
+                            </Flex>
+                          </Box>
+
+                          {/* Collapsed: param overview chips */}
+                          {!expanded && chips.length > 0 && (
+                            <Flex gap="2" wrap="wrap" pl="5" className="playground-param-chips">
+                              {chips.map((c) => (
+                                <Text key={c.key} as="span" size="1" className="playground-param-chip">{c.text}</Text>
+                              ))}
+                            </Flex>
+                          )}
+
+                          {/* Expanded: sectioned params */}
+                          {expanded && (
+                            <Box className="playground-model-params" pl="5">
+                              {/* ── Protocol ── */}
+                              <Flex align="center" gap="2" mb="2">
+                                <Text size="1" weight="bold" className="playground-param-group-title">{t("playground.paramGroupProtocol")}</Text>
+                                <Separator style={{ flex: 1 }} />
+                              </Flex>
+                              <Select.Root value={m.apiType} onValueChange={(v) => changeApiType(m.key, v as PlaygroundApiType)}>
+                                <Select.Trigger style={{ width: "100%" }} />
+                                <Select.Content>
+                                  {(Object.keys(PLAYGROUND_API_LABEL) as PlaygroundApiType[]).map((api) => (
+                                    <Select.Item key={api} value={api}>{PLAYGROUND_API_LABEL[api]}</Select.Item>
+                                  ))}
+                                </Select.Content>
+                              </Select.Root>
+
+                              {/* ── Sampling ── */}
+                              <Flex align="center" gap="2" mt="3" mb="2">
+                                <Text size="1" weight="bold" className="playground-param-group-title">{t("playground.paramGroupSampling")}</Text>
+                                <Separator style={{ flex: 1 }} />
+                              </Flex>
+
+                              {/* temperature slider row */}
+                              <Flex className="playground-param-slider-row" align="center" gap="2">
+                                <Text as="label" size="1" color="gray" weight="medium" className="playground-param-slider-label">{t("playground.temperature")}</Text>
+                                <Slider
+                                  className="playground-param-slider"
+                                  min={0}
+                                  max={2}
+                                  step={0.1}
+                                  value={[parseFloat(m.params.temperature) || 0]}
+                                  onValueChange={([v]) => updateModelParams(m.key, { temperature: String(Math.round(v * 10) / 10) })}
+                                />
+                                <TextField.Root
+                                  className="playground-param-slider-input"
+                                  size="1"
+                                  placeholder="0.7"
+                                  value={m.params.temperature}
+                                  onChange={(e) => updateModelParams(m.key, { temperature: e.target.value })}
+                                />
+                                <Text as="span" size="1" color="gray" className="playground-param-range-badge">0–2</Text>
+                              </Flex>
+
+                              {/* top_p slider row */}
+                              <Flex className="playground-param-slider-row" align="center" gap="2" mt="2">
+                                <Text as="label" size="1" color="gray" weight="medium" className="playground-param-slider-label">{t("playground.topP")}</Text>
+                                <Slider
+                                  className="playground-param-slider"
+                                  min={0}
+                                  max={1}
+                                  step={0.05}
+                                  value={[parseFloat(m.params.topP) || 0]}
+                                  onValueChange={([v]) => updateModelParams(m.key, { topP: String(Math.round(v * 100) / 100) })}
+                                />
+                                <TextField.Root
+                                  className="playground-param-slider-input"
+                                  size="1"
+                                  placeholder="1.0"
+                                  value={m.params.topP}
+                                  onChange={(e) => updateModelParams(m.key, { topP: e.target.value })}
+                                />
+                                <Text as="span" size="1" color="gray" className="playground-param-range-badge">0–1</Text>
+                              </Flex>
+
+                              {/* max_tokens row */}
+                              <Flex align="center" gap="2" mt="2">
+                                <Text as="label" size="1" color="gray" weight="medium" className="playground-param-field-label">{t("playground.maxTokens")}</Text>
+                                <TextField.Root
+                                  className="playground-param-field-input"
+                                  size="1"
+                                  placeholder="4096"
+                                  value={m.params.maxTokens}
+                                  onChange={(e) => updateModelParams(m.key, { maxTokens: e.target.value })}
+                                />
+                                {m.apiType === "anthropic" ? (
+                                  <Badge variant="soft" color="red" size="1">{t("playground.maxTokensRequired")}</Badge>
+                                ) : (
+                                  <Badge variant="soft" color="gray" size="1">{t("playground.maxTokensOptional")}</Badge>
+                                )}
+                              </Flex>
+                              <Text size="1" color="gray" mt="1" as="p">{t("playground.maxTokensHelper")}</Text>
+
+                              {/* ── Reasoning ── */}
+                              <Flex align="center" gap="2" mt="3" mb="2">
+                                <Text size="1" weight="bold" className="playground-param-group-title">{t("playground.paramGroupReasoning")}</Text>
+                                <Separator style={{ flex: 1 }} />
+                              </Flex>
+
+                              {/* reasoning_effort */}
+                              <Flex align="center" gap="2">
+                                <Text as="label" size="1" color="gray" weight="medium" className="playground-param-field-label">{t("playground.reasoningEffort")}</Text>
+                                <Box style={{ flex: 1 }}>
+                                  <Select.Root
+                                    value={m.params.reasoningEffort || "__none__"}
+                                    onValueChange={(v) => updateModelParams(m.key, { reasoningEffort: v === "__none__" ? "" : (v as PlaygroundReasoningEffort) })}
+                                    disabled={(m.apiType === "openai-responses" || m.apiType === "anthropic") && m.params.enableThinking === "off"}
+                                  >
+                                    <Select.Trigger style={{ width: "100%" }} />
+                                    <Select.Content>
+                                      <Select.Item value="__none__">{t("playground.reasoningEffortNone")}</Select.Item>
+                                      {PLAYGROUND_REASONING_EFFORTS.map((r) => (
+                                        <Select.Item key={r} value={r}>{r}</Select.Item>
+                                      ))}
+                                    </Select.Content>
+                                  </Select.Root>
+                                </Box>
+                              </Flex>
+                              {(m.apiType === "openai-responses" || m.apiType === "anthropic") && m.params.enableThinking === "off" && (
+                                <Text size="1" color="amber" mt="1" as="p">{t("playground.reasoningEffortDisabledTip")}</Text>
+                              )}
+
+                              {/* enable_thinking SegmentedControl */}
+                              <Flex align="center" gap="2" mt="2">
+                                <Text as="label" size="1" color="gray" weight="medium" className="playground-param-field-label">{t("playground.enableThinking")}</Text>
+                                <SegmentedControl.Root
+                                  size="1"
+                                  value={m.params.enableThinking}
+                                  onValueChange={(v) => updateModelParams(m.key, { enableThinking: v as PlaygroundEnableThinking })}
+                                  style={{ flex: 1 }}
+                                >
+                                  {PLAYGROUND_ENABLE_THINKING_VALUES.map((v) => (
+                                    <SegmentedControl.Item key={v} value={v}>
+                                      {t(`playground.enableThinking${v.charAt(0).toUpperCase() + v.slice(1)}`)}
+                                    </SegmentedControl.Item>
+                                  ))}
+                                </SegmentedControl.Root>
+                              </Flex>
+
+                              {/* reasoning hint per API type */}
+                              <Text size="1" color="gray" mt="2" as="p">
+                                {m.apiType === "openai-chat"
+                                  ? t("playground.reasoningHintChat")
+                                  : m.apiType === "openai-responses"
+                                    ? t("playground.reasoningHintResponses")
+                                    : t("playground.reasoningHintAnthropic")}
+                              </Text>
+                            </Box>
+                          )}
+                        </Flex>
+                      </Box>
+                    );
+                  })}
+                </Flex>
+              </Box>
+            </Box>
+        </Box>
+      )}
 
     </Box>
   );

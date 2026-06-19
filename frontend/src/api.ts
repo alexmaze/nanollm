@@ -168,6 +168,9 @@ export const PLAYGROUND_API_LABEL: Record<PlaygroundApiType, string> = {
 export const PLAYGROUND_REASONING_EFFORTS = ["low", "medium", "high", "max"] as const;
 export type PlaygroundReasoningEffort = (typeof PLAYGROUND_REASONING_EFFORTS)[number] | "";
 
+export const PLAYGROUND_ENABLE_THINKING_VALUES = ["auto", "on", "off"] as const;
+export type PlaygroundEnableThinking = (typeof PLAYGROUND_ENABLE_THINKING_VALUES)[number];
+
 export interface RecordDetail {
   requestId: string;
   key: string;

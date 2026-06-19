@@ -7,7 +7,7 @@
  * client request is easy to read.
  */
 
-import { PLAYGROUND_ENDPOINT_BY_API, type PlaygroundApiType, type PlaygroundReasoningEffort } from "../../api";
+import { PLAYGROUND_ENDPOINT_BY_API, type PlaygroundApiType, type PlaygroundReasoningEffort, type PlaygroundEnableThinking } from "../../api";
 
 export interface PlaygroundImage {
   id: string;
@@ -32,6 +32,7 @@ export interface PlaygroundParams {
   topP: string;
   maxTokens: string;
   reasoningEffort: PlaygroundReasoningEffort;
+  enableThinking: PlaygroundEnableThinking;
 }
 
 export interface PlaygroundHistoryMessage {
@@ -120,6 +121,7 @@ export function buildRequestBody(apiType: PlaygroundApiType, opts: BuildBodyOpti
   const maxTokens = parseOptionalNumber(opts.maxTokens);
   const system = opts.system.trim();
   const effort = opts.reasoningEffort || "";
+  const enableThinking = opts.enableThinking || "auto";
 
   if (apiType === "openai-chat") {
     const messages: unknown[] = [];
@@ -139,6 +141,7 @@ export function buildRequestBody(apiType: PlaygroundApiType, opts: BuildBodyOpti
       ...(topP != null && { top_p: topP }),
       ...(maxTokens != null && { max_tokens: maxTokens }),
       ...(effort && { reasoning_effort: effort, reasoning: { effort } }),
+      ...(enableThinking !== "auto" && { enable_thinking: enableThinking === "on" }),
     };
   }
 
@@ -158,7 +161,7 @@ export function buildRequestBody(apiType: PlaygroundApiType, opts: BuildBodyOpti
       ...(temperature != null && { temperature }),
       ...(topP != null && { top_p: topP }),
       ...(maxTokens != null && { max_output_tokens: maxTokens }),
-      ...(effort && { reasoning: { effort } }),
+      ...(effort && enableThinking !== "off" && { reasoning: { effort } }),
     };
   }
 
@@ -178,9 +181,12 @@ export function buildRequestBody(apiType: PlaygroundApiType, opts: BuildBodyOpti
     stream: true,
     ...(temperature != null && { temperature }),
     ...(topP != null && { top_p: topP }),
-    ...(effort && {
+    ...(enableThinking !== "off" && effort && {
       thinking: { type: "enabled", budget_tokens: effortToBudget(effort) },
       output_config: { effort },
+    }),
+    ...(enableThinking === "on" && !effort && {
+      thinking: { type: "enabled", budget_tokens: 8000 },
     }),
   };
 }
